@@ -3,21 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Adventure Rooms · Devices</title>
+  <title>Adventure Rooms · Reception</title>
   <link rel="stylesheet" href="/style.css">
-  <script src="/app.js" defer></script>
+  <script src="/app.js" type="module"></script>
 </head>
 <body>
   <header><div class="brand">AR<span>ADVENTURE ROOMS</span></div><span id="connection" class="badge" role="status">Connecting to the local server…</span></header>
   <main>
-    <div class="eyebrow">OPERATOR PANEL / DIAGNOSTICS</div>
+    <div class="eyebrow">OPERATOR PANEL / RECEPTION & DIAGNOSTICS</div>
     <h1>Your venue. Your network.</h1>
-    <p class="intro">Monitor UUPC controllers and RFID readings on your local network. One reader per controller.</p>
+    <p class="intro">Manage team sessions and wristbands, and monitor UUPC controllers on your local network.</p>
+    <section id="reception" aria-labelledby="reception-title">
+      <div class="section-heading"><h2 id="reception-title">Reception</h2><span>Local team sessions</span></div>
+      <p id="reception-error" role="alert" hidden></p><p id="reception-message" role="status"></p>
+      <div class="reception-forms">
+        <form id="session-form" class="reception-box"><h3>Start a team session</h3><label for="team-name">Team name</label><input id="team-name" name="name" required maxlength="80" autocomplete="off"><label for="session-duration">Duration</label><select id="session-duration"><option value="60">60 minutes</option><option value="90" selected>90 minutes</option><option value="120">120 minutes</option></select><button type="submit">Start session</button></form>
+        <form id="card-form" class="reception-box"><h3>Assign a wristband</h3><label for="target-session">Target session</label><select id="target-session" required><option value="">Select an active session</option></select><label for="rfid-reader">RFID reader</label><select id="rfid-reader"><option value="">Select a controller</option></select><p id="reader-reading" class="field-hint">Select a reader to see its last known reading.</p><button id="use-reader" type="button" class="secondary">Use reader UID</button><label for="card-uid">Card UID (8 hexadecimal characters)</label><input id="card-uid" required pattern="[0-9a-fA-F]{8}" minlength="8" maxlength="8" placeholder="12AB34CD" autocomplete="off" spellcheck="false"><p class="field-hint">Review the UID, then assign it explicitly. A reader's last known reading may be old. Manual entry is supported.</p><button type="submit">Assign card</button></form>
+      </div>
+      <div id="sessions" class="session-list"><p class="empty">Waiting for sessions…</p></div>
+    </section>
     <p id="discovery" role="status">Checking UDP discovery…</p>
     <div class="summary"><div><span id="device-count">—</span><small>known controllers</small></div><div><span id="active-count">—</span><small>active in the last 25 s</small></div><div><span id="event-count">—</span><small>events displayed</small></div></div>
     <section aria-labelledby="devices-title"><div class="section-heading"><h2 id="devices-title">UUPC controllers</h2><span id="updated">Waiting for data</span></div><p id="error" role="alert" hidden></p><div id="devices" class="devices"><p class="empty">Waiting for device data…</p></div></section>
     <section aria-labelledby="events-title"><div class="section-heading"><h2 id="events-title">Recent RFID events</h2><span>Newest first</span></div><div class="table-wrap"><table><thead><tr><th>Received at</th><th>Controller</th><th>Event</th><th>UID</th></tr></thead><tbody id="events"></tbody></table><p id="events-empty" class="empty">No RFID events yet.</p></div></section>
-    <footer>HTTP + ERCC discovery over UDP · No cloud · Read-only panel<br>No new events does not mean no activity: firmware sends the last RFID state and may miss rapid changes.</footer>
+    <footer>HTTP + ERCC discovery over UDP · No cloud · No hardware commands<br>No new events does not mean no activity: firmware sends the last RFID state and may miss rapid changes.</footer>
   </main>
 </body>
 </html>
