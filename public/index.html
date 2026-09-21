@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Adventure Rooms · Urządzenia</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header><div class="brand">AR<span>ADVENTURE ROOMS</span></div><span id="connection" class="badge" role="status">Łączenie z serwerem lokalnym…</span></header>
+  <main>
+    <div class="eyebrow">PANEL OPERATORA / DIAGNOSTYKA</div>
+    <h1>Twój obiekt. Twoja sieć.</h1>
+    <p class="intro">Podgląd kontrolerów UUPC i odczytów RFID w sieci lokalnej. Jeden czytnik na kontroler.</p>
+    <div class="summary"><div><span id="device-count">—</span><small>znanych kontrolerów</small></div><div><span id="active-count">—</span><small>aktywnych w ostatnich 25 s</small></div><div><span id="event-count">—</span><small>zdarzeń w podglądzie</small></div></div>
+    <section aria-labelledby="devices-title"><div class="section-heading"><h2 id="devices-title">Kontrolery UUPC</h2><span id="updated">Oczekiwanie na dane</span></div><p id="error" role="alert" hidden></p><div id="devices" class="devices"><p class="empty">Oczekiwanie na dane urządzeń…</p></div></section>
+    <section aria-labelledby="events-title"><div class="section-heading"><h2 id="events-title">Ostatnie zdarzenia RFID</h2><span>Od najnowszych</span></div><div class="table-wrap"><table><thead><tr><th>Czas odbioru</th><th>Kontroler</th><th>Zdarzenie</th><th>UID</th></tr></thead><tbody id="events"></tbody></table><p id="events-empty" class="empty">Brak zdarzeń RFID.</p></div></section>
+    <footer>HTTP + wykrywanie ERCC przez UDP · Bez chmury · Panel tylko do odczytu<br>Brak nowych zdarzeń nie oznacza braku ruchu: firmware przesyła ostatni stan RFID i może pominąć szybkie zmiany.</footer>
+  </main>
+</body>
+</html>
