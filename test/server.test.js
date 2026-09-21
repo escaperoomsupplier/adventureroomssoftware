@@ -139,3 +139,38 @@ test('pushes committed state to multiple live clients without polling, and resyn
   // Active SSE subscriptions must not prevent graceful shutdown.
   await app.close();
 });
+
+test('reception mutations enforce card ownership and publish session updates', async t => {
+  const { url } = await fixture(t);
+  const live = await openLive(t, url);
+  assert.deepEqual((await live.next()).sessions, []);
+  const post = (path, body, headers = {}) => fetch(`${url}${path}`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+  const created = await post('/api/reception/sessions', { name: 'Team One', durationMinutes: 60 });
+  assert.equal(created.status, 201);
+  const { session: first } = await created.json();
+  assert.equal((await live.next()).sessions[0].teamName, 'Team One');
+  const secondResponse = await post('/api/reception/sessions', { name: 'Team Two', durationMinutes: 90 });
+  const { session: second } = await secondResponse.json();
+  await live.next();
+  const cardPath = id => `/api/reception/sessions/${id}/cards`;
+  assert.equal((await post(cardPath(first.id), { uid: 'aabbccdd' })).status, 200);
+  assert.deepEqual((await live.next()).sessions.find(s => s.id === first.id).cards, ['AABBCCDD']);
+  const conflict = await post(cardPath(second.id), { uid: 'AABBCCDD' });
+  assert.equal(conflict.status, 409);
+  assert.ok((await conflict.json()).error);
+  const forbidden = await post('/api/reception/sessions', { name: 'Blocked', durationMinutes: 60 }, { Origin: 'http://example.invalid' });
+  assert.equal(forbidden.status, 403);
+  assert.equal((await post('/api/reception/sessions', { name: '', durationMinutes: 0 })).status, 400);
+  const release = await fetch(`${url}${cardPath(first.id)}/AABBCCDD`, { method: 'DELETE' });
+  assert.equal(release.status, 200);
+  await live.next();
+  assert.equal((await post(cardPath(second.id), { uid: 'AABBCCDD' })).status, 200);
+  await live.next();
+  const ended = await post(`/api/reception/sessions/${second.id}/end`, {});
+  assert.equal(ended.status, 200);
+  const state = await live.next();
+  assert.equal(state.sessions.find(s => s.id === second.id).status, 'ended');
+  assert.deepEqual(state.sessions.find(s => s.id === second.id).cards, []);
+  assert.equal((await (await fetch(`${url}/api/reception/sessions`)).json()).length, 2);
+});
