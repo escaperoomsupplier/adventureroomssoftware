@@ -47,6 +47,28 @@ export async function startServer({
   const store = new DeviceStore(databasePath);
   let discoveryHandle;
   let discoveryError = null;
+  const subscribers = new Set();
+  const health = () => ({ status: 'ok', local: true, transport: 'http-ercc',
+    discovery: discovery ? (discoveryError ? 'degraded' : 'active') : 'disabled', discoveryError });
+  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: store.listDevices(), events: store.listEvents(100) })}\n\n`;
+  const sendFrame = (res, frame) => {
+    // Disconnect slow readers instead of allowing an unbounded outgoing queue.
+    if (res.destroyed || res.writableLength > 256 * 1024) {
+      subscribers.delete(res);
+      res.destroy();
+      return;
+    }
+    res.write(frame);
+  };
+  const publish = () => {
+    if (!subscribers.size) return;
+    const frame = stateFrame();
+    for (const res of subscribers) sendFrame(res, frame);
+  };
+  const heartbeat = setInterval(() => {
+    for (const res of subscribers) sendFrame(res, ': keep-alive\n\n');
+  }, 15000);
+  heartbeat.unref();
   const server = http.createServer(async (req, res) => {
     try {
       const pathname = new URL(req.url, 'http://localhost').pathname;
@@ -69,10 +91,28 @@ export async function startServer({
         catch { return json(res, 400, { error: 'Invalid UUPC snapshot' }); }
         store.recordSnapshot(snapshot, req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? 'unknown');
         // ACK only after SQLite commit. UUPC checks for literal "200 OK".
-        return json(res, 200, { status: 'ok' });
+        json(res, 200, { status: 'ok' });
+        publish();
+        return;
+      }
+      if (req.method === 'GET' && pathname === '/api/live') {
+        if (subscribers.size >= 64) return json(res, 503, { error: 'Too many live connections' });
+        // A complete snapshot on every connection also repairs gaps after reconnect.
+        const initial = stateFrame();
+        req.socket.setTimeout(0);
+        req.socket.setNoDelay(true);
+        res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no', 'X-Content-Type-Options': 'nosniff' });
+        res.flushHeaders();
+        subscribers.add(res);
+        res.on('close', () => subscribers.delete(res));
+        res.on('error', () => { subscribers.delete(res); res.destroy(); });
+        sendFrame(res, `retry: 1000\n${initial}`);
+        return;
       }
       if (req.method === 'GET' && pathname === '/api/health') {
-        return json(res, 200, { status: 'ok', local: true, transport: 'http-ercc', discovery: discovery ? (discoveryError ? 'degraded' : 'active') : 'disabled', discoveryError });
+        return json(res, 200, health());
       }
       if (req.method === 'GET' && pathname === '/api/devices') return json(res, 200, store.listDevices());
       if (req.method === 'GET' && pathname === '/api/events') return json(res, 200, store.listEvents(100));
@@ -102,13 +142,16 @@ export async function startServer({
     if (discovery) {
       discoveryHandle = await startDiscovery({ ...discoveryOptions,
         onDevice: device => {
-          try { store.recordDiscovery(device); }
+          try { store.recordDiscovery(device); publish(); }
           catch (error) { logger.error('Discovery storage failed:', error.message); }
         },
-        onError: error => { discoveryError = error.message; logger.error('UDP discovery:', error.message); },
+        onError: error => { discoveryError = error.message; logger.error('UDP discovery:', error.message); publish(); },
       });
     }
   } catch (error) {
+    clearInterval(heartbeat);
+    for (const res of subscribers) res.destroy();
+    subscribers.clear();
     if (server.listening) await new Promise(done => server.close(done));
     store.close();
     throw error;
@@ -118,6 +161,9 @@ export async function startServer({
     if (closed) return;
     closed = true;
     await discoveryHandle?.close();
+    clearInterval(heartbeat);
+    for (const res of subscribers) res.end();
+    subscribers.clear();
     await new Promise(done => server.close(done));
     store.close();
   } };

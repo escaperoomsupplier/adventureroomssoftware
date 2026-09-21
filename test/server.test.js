@@ -88,3 +88,54 @@ test('startup bind failure releases database and does not announce discovery', a
   const { app } = await fixture(t);
   await assert.rejects(startServer({ host: '127.0.0.1', port: app.address.port, databasePath: ':memory:', discovery: false, logger: silent }), { code: 'EADDRINUSE' });
 });
+
+async function openLive(t, url) {
+  const controller = new AbortController();
+  const response = await fetch(`${url}/api/live`, { signal: controller.signal });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /^text\/event-stream/);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  t.after(() => controller.abort());
+  return { close: () => controller.abort(), async next() {
+    const timer = setTimeout(() => controller.abort(new Error('Live state timed out')), 3000);
+    try {
+      for (;;) {
+        const boundary = buffer.indexOf('\n\n');
+        if (boundary >= 0) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = frame.split('\n').find(line => line.startsWith('data: '));
+          if (data) return JSON.parse(data.slice(6));
+          continue;
+        }
+        const { value, done } = await reader.read();
+        if (done) throw new Error('Live stream ended');
+        buffer += decoder.decode(value, { stream: true });
+      }
+    } finally { clearTimeout(timer); }
+  } };
+}
+
+test('pushes committed state to multiple live clients without polling, and resyncs on reconnect', async t => {
+  const { app, url } = await fixture(t);
+  const first = await openLive(t, url);
+  const second = await openLive(t, url);
+  assert.deepEqual((await first.next()).devices, []);
+  assert.equal((await second.next()).health.discovery, 'disabled');
+  for (const card of ['00000000_0', 'AABBCCDD_1', 'AABBCCDD_1']) {
+    await firmwarePost(app.address.port, JSON.stringify(payload(card)));
+    const [a, b] = await Promise.all([first.next(), second.next()]);
+    assert.equal(a.devices[0].lastRfid.uid, card.slice(0, 8));
+    assert.deepEqual(a, b);
+    assert.equal(a.events.length, card === '00000000_0' ? 0 : 1);
+  }
+  first.close();
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_0')));
+  assert.equal((await second.next()).events[0].type, 'rfid.removed');
+  const reconnected = await openLive(t, url);
+  assert.equal((await reconnected.next()).events.length, 2);
+  // Active SSE subscriptions must not prevent graceful shutdown.
+  await app.close();
+});
