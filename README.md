@@ -1,10 +1,10 @@
 # Adventure Rooms — local UUPC integration
 
 The initial foundation includes ERCC-compatible UUPC discovery, an HTTP POST
-receiver, a local SQLite database and a diagnostics panel. HTTP is the permanent
+receiver, a local SQLite database, reception tools and a diagnostics panel. HTTP is the permanent
 transport. Runtime operation uses no MQTT, cloud services or external assets.
-One RFID reader per UUPC is assumed. This stage does not yet include teams,
-scoring, lock control or an Electron installer.
+One RFID reader per UUPC is assumed. Reception supports team sessions and RFID card
+assignments. This stage does not yet include scoring, lock control or an Electron installer.
 
 ## Running on Windows / macOS
 
@@ -62,7 +62,7 @@ above explicitly restore the settings needed for real hardware.
 - UUPC replies with `UNIVERSAL_` followed by its 14-character ID. The firmware heartbeat repeats every 8 seconds.
 - UUPC sends its full state through `POST / HTTP/1.0` to port 4000 at the hello sender's address.
 - The receiver acknowledges with `200 OK` only after committing the SQLite transaction.
-- The panel currently provides diagnostics without authentication and is intended for a trusted LAN.
+- The panel provides reception management and diagnostics without authentication and is intended for a trusted LAN.
 
 Configuration variables: `HOST`, `PORT`, `DATA_DIR`, `DISCOVERY=0`, `DISCOVERY_BIND`
 (interface IPv4 address), and `DISCOVERY_TARGETS` (comma-separated IPv4 addresses:
@@ -101,7 +101,22 @@ The current firmware forwards 4 UID bytes and does not identify the reader port.
 Expander rosters shaped as `{id,full,sensors}` are acknowledged but are not processed
 as the main UUPC state.
 
-Next steps: assign UUPC devices to rooms, introduce team sessions and manage
-wristbands. Physical RFID communication has been verified. Before controlling
-games, verify round-control behavior and establish how round starts and results
-will be confirmed.
+## Reception
+
+Create a team session with a name and duration, select it, then assign one or more
+eight-character RFID UIDs. The interface offers 60, 90 and 120 minutes; the API
+accepts whole-minute durations from 1 to 720. A session starts when it is created.
+You can type a UID or explicitly copy the selected reader's last known UID. Check
+that the displayed card is the intended one before assigning it: a last reading
+is not proof that the card is still present.
+
+A card can belong to only one active, unexpired session. Release a card or end its
+session before reusing it, or reuse it after the session expires. Assignments are
+explicit: scanning a card does not automatically create or change a session.
+Session deadlines and assignment history persist in SQLite across restarts.
+The server enforces expiry even if no panel is open. These controls do not start
+a room, open a door or award points.
+
+Next steps: assign UUPC devices to rooms and add round tracking and scoring.
+Physical RFID communication has been verified. Before controlling games, verify
+round-control behavior and establish how round starts and results will be confirmed.

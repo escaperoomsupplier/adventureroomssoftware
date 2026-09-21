@@ -5,12 +5,14 @@ import { fileURLToPath } from 'node:url';
 import { DeviceStore } from './store.js';
 import { parseSnapshot } from './protocol.js';
 import { startDiscovery } from './discovery.js';
+import { ReceptionStore } from './reception.js';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
+  ['/reception.js', ['reception.js', 'text/javascript; charset=utf-8']],
 ]);
 const MAX_BODY = 16 * 1024;
 
@@ -45,12 +47,13 @@ export async function startServer({
 } = {}) {
   if (databasePath !== ':memory:') await mkdir(dirname(databasePath), { recursive: true });
   const store = new DeviceStore(databasePath);
+  const reception = new ReceptionStore(store.db);
   let discoveryHandle;
   let discoveryError = null;
   const subscribers = new Set();
   const health = () => ({ status: 'ok', local: true, transport: 'http-ercc',
     discovery: discovery ? (discoveryError ? 'degraded' : 'active') : 'disabled', discoveryError });
-  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: store.listDevices(), events: store.listEvents(100) })}\n\n`;
+  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: store.listDevices(), events: store.listEvents(100), sessions: reception.listSessions() })}\n\n`;
   const sendFrame = (res, frame) => {
     // Disconnect slow readers instead of allowing an unbounded outgoing queue.
     if (res.destroyed || res.writableLength > 256 * 1024) {
@@ -72,6 +75,41 @@ export async function startServer({
   const server = http.createServer(async (req, res) => {
     try {
       const pathname = new URL(req.url, 'http://localhost').pathname;
+      if (pathname === '/api/reception/sessions' && req.method === 'GET') {
+        return json(res, 200, reception.listSessions());
+      }
+      if (pathname.startsWith('/api/reception/') && ['POST', 'DELETE'].includes(req.method)) {
+        // Browsers may submit reception changes only from this application's origin.
+        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
+          return json(res, 403, { error: 'Cross-origin reception changes are not allowed' });
+        }
+        let body = {};
+        if (req.method === 'POST') {
+          if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) {
+            return json(res, 415, { error: 'Expected application/json' });
+          }
+          body = await readJson(req);
+          if (!body || typeof body !== 'object' || Array.isArray(body)) {
+            return json(res, 400, { error: 'Expected a JSON object' });
+          }
+        }
+        let session;
+        let status = 200;
+        const route = /^\/api\/reception\/sessions\/([A-Za-z0-9-]{1,80})\/(cards|end)(?:\/([A-Za-z0-9]{1,32}))?$/.exec(pathname);
+        if (pathname === '/api/reception/sessions' && req.method === 'POST') {
+          session = reception.createSession(body);
+          status = 201;
+        } else if (route && route[2] === 'cards' && !route[3] && req.method === 'POST') {
+          session = reception.assignCard(route[1], body.uid);
+        } else if (route && route[2] === 'cards' && route[3] && req.method === 'DELETE') {
+          session = reception.releaseCard(route[1], route[3]);
+        } else if (route && route[2] === 'end' && !route[3] && req.method === 'POST') {
+          session = reception.endSession(route[1]);
+        } else return json(res, 404, { error: 'Not found' });
+        json(res, status, { session });
+        publish();
+        return;
+      }
       if (req.method === 'POST' && pathname === '/') {
         // Firmware sends HTTP/1.0 with an empty Host and string-valued numbers.
         // Browser-originated cross-site writes are unnecessary for this device endpoint.
@@ -157,7 +195,7 @@ export async function startServer({
     throw error;
   }
   let closed = false;
-  return { server, store, address: server.address(), async close() {
+  return { server, store, reception, address: server.address(), async close() {
     if (closed) return;
     closed = true;
     await discoveryHandle?.close();
