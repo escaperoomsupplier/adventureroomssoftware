@@ -1,25 +1,29 @@
-# Adventure Rooms — lokalna integracja UUPC
+# Adventure Rooms — local UUPC integration
 
-Pierwszy działający fundament: wykrywanie UUPC jak w ERCC, odbiór HTTP POST,
-lokalna baza SQLite i panel diagnostyczny. Docelowym transportem pozostaje HTTP.
-Nie używa MQTT, chmury ani zewnętrznych zasobów podczas pracy. Zakładamy jeden
-czytnik RFID na UUPC. Ten etap nie zawiera jeszcze drużyn, punktacji, sterowania
-zamkami ani instalatora Electron.
+The initial foundation includes ERCC-compatible UUPC discovery, an HTTP POST
+receiver, a local SQLite database and a diagnostics panel. HTTP is the permanent
+transport. Runtime operation uses no MQTT, cloud services or external assets.
+One RFID reader per UUPC is assumed. This stage does not yet include teams,
+scoring, lock control or an Electron installer.
 
-## Uruchomienie na Windows / macOS
+## Running on Windows / macOS
 
-Wymagany Node.js 24.11 lub nowszy. Brak pakietów do instalowania.
+Node.js 24.11 or newer is required. There are no packages to install.
 
 ```sh
 npm start
 ```
 
-Panel: http://localhost:4000. Baza: `data/adventure-rooms.sqlite` (ignorowana przez Git).
-Proces serwera działa niezależnie od okna przeglądarki, ale musi pozostać uruchomiony.
-Zatrzymanie: Ctrl+C. Kopię bazy wraz z potrzebnymi plikami WAL wykonuj po poprawnym
-zatrzymaniu procesu; nie kopiuj samego pliku aktywnej bazy.
+Panel: http://localhost:4000. Database: `data/adventure-rooms.sqlite` (ignored by Git).
+The server runs independently of the browser window, but its process must remain
+running. Stop it with Ctrl+C. Back up the database and any required WAL files after
+a clean shutdown; do not copy only the database file while it is active.
 
-**Próba bez sprzętu i bez broadcastu do sieci:**
+The panel receives immediate server-sent events (SSE over HTTP). On connection and
+reconnection, the server sends a full snapshot to restore the current view. There
+is no two-second polling loop.
+
+**Try it without hardware or network broadcasts:**
 
 PowerShell:
 ```powershell
@@ -33,51 +37,71 @@ macOS:
 DISCOVERY=0 HOST=127.0.0.1 npm start
 ```
 
-W drugim terminalu: `npm run simulate`. Testy: `npm test` (wyłącznie loopback i
-tymczasowe bazy). CI uruchamia je na Windows, macOS i Linux.
+In a second terminal, run `npm run simulate`. Run tests with `npm test` (loopback
+and temporary databases only). CI runs the tests on Windows, macOS and Linux.
 
-## Sieć obiektu
+## Venue network
 
-- Domyślnie HTTP nasłuchuje na `0.0.0.0:4000`, UDP na `0.0.0.0:9811`.
-- W zaporze dopuść TCP 4000 oraz UDP 9811 tylko w sieci obiektu.
-- Co 5 sekund wysyłamy `Hello_from_ERCC\0` na UDP 9811, broadcast `255.255.255.255`.
-- UUPC odpowiada `UNIVERSAL_` + 14 znaków ID. Heartbeat firmware powtarza się co 8 sekund.
-- UUPC wysyła pełny stan przez `POST / HTTP/1.0` na port 4000 adresu nadawcy hello.
-- ACK `200 OK` następuje dopiero po zapisie transakcji SQLite.
-- Panel jest na razie diagnostyczny, bez logowania, przeznaczony do zaufanej sieci LAN.
+**Start with real hardware (PowerShell):**
 
-Zmienne: `HOST`, `PORT`, `DATA_DIR`, `DISCOVERY=0`, `DISCOVERY_BIND` (IPv4 interfejsu),
-`DISCOVERY_TARGETS` (adresy IPv4 rozdzielone przecinkami, broadcast podsieci lub IP
-kontrolerów). Przy wielu kartach sieciowych wybierz interfejs i broadcast sieci
-pokojów. Dla rzeczywistych UUPC zachowaj HTTP 4000 i UDP 9811 — port docelowy jest
-zapisany w firmware. Broadcast nie przechodzi zwykle między podsieciami.
+```powershell
+$env:DISCOVERY='1'
+$env:HOST='0.0.0.0'
+$env:PORT='4000'
+npm start
+```
 
-Nie uruchamiaj równocześnie innego ERCC w tej samej sieci. Analizowane firmware
-zapamiętuje **pierwszy** adres ERCC i nie podmienia go po kolejnych hello. Po zmianie
-komputera, adresu IP lub odbiorcy może być potrzebny restart UUPC. Zalecany stały
-adres komputera lub rezerwacja DHCP.
+Stop any running demo server first. Environment variables remain set in the same
+terminal after the server stops: the demo's `DISCOVERY=0` disables discovery and
+`HOST=127.0.0.1` prevents devices on the LAN from reaching the receiver. The commands
+above explicitly restore the settings needed for real hardware.
 
-## Semantyka RFID i ograniczenia
+- HTTP listens on `0.0.0.0:4000` and UDP on `0.0.0.0:9811` by default.
+- Allow TCP 4000 and UDP 9811 through the firewall only on the venue network.
+- Every 5 seconds, the server broadcasts `Hello_from_ERCC\0` to `255.255.255.255` on UDP 9811.
+- UUPC replies with `UNIVERSAL_` followed by its 14-character ID. The firmware heartbeat repeats every 8 seconds.
+- UUPC sends its full state through `POST / HTTP/1.0` to port 4000 at the hello sender's address.
+- The receiver acknowledges with `200 OK` only after committing the SQLite transaction.
+- The panel currently provides diagnostics without authentication and is intended for a trusted LAN.
 
-`message.RFID` to ostatni stan `AABBCCDD_1` / `AABBCCDD_0`, a nie identyfikator nowego
-zdarzenia. Kolejne POST-y innych stanów powtarzają tę wartość. Porównujemy ją z
-poprzednią zapisaną wartością per UUPC, również po restarcie serwera. UID przechowujemy
-jako tekst (z zerami z przodu). Stan `00000000_0` to początkowy sentinel firmware.
+Configuration variables: `HOST`, `PORT`, `DATA_DIR`, `DISCOVERY=0`, `DISCOVERY_BIND`
+(interface IPv4 address), and `DISCOVERY_TARGETS` (comma-separated IPv4 addresses:
+subnet broadcast addresses or controller IPs). With multiple network interfaces,
+select the interface and broadcast address for the room network. Keep HTTP 4000
+and UDP 9811 for real UUPC devices: the destination ports are fixed in the firmware.
+Broadcasts do not normally cross subnets.
 
-Pierwsza nieznana wartość jest bazą porównania, bez emitowania zdarzenia. To zapobiega
-uznaniu starej przyłożonej karty za nowe wejście, ale pierwszy rzeczywisty odczyt może
-zostać pominięty. Po uruchomieniu sprawdź połączenie i wykonaj próbne przyłożenie oraz
-zabranie karty przed użyciem operacyjnym. Panel pokazuje również ostatni stan karty.
+Do not run another ERCC instance on the same network at the same time. The analyzed
+firmware retains the **first** ERCC address and does not replace it after subsequent
+hello messages. Changing the computer, its IP address or the receiver may require
+a UUPC restart. A fixed computer address or DHCP reservation is recommended.
 
-Firmware nie przesyła numeru zdarzenia, boot ID ani czasu odczytu w POST. Zapisany
-czas to czas odbioru przez komputer. Utraconych przejść lub zamienionej kolejności
-nie da się jednoznacznie odtworzyć z samego ostatniego stanu; to nie jest gwarancja
-exactly-once. HTTP firmware ma ograniczoną kolejkę i nie zapewnia trwałego odtwarzania.
-Historia `/rfid/history` nie jest jeszcze używana. Nie naliczamy na tej podstawie
-punktów ani nie otwieramy drzwi w tym etapie.
+## RFID semantics and limitations
 
-Obecny firmware przekazuje 4 bajty UID i nie podaje portu czytnika. Roster ekspanderów
-`{id,full,sensors}` jest potwierdzany, ale nie przetwarzany jako stan głównego UUPC.
+`message.RFID` is the last state, `AABBCCDD_1` / `AABBCCDD_0`, rather than a new event
+identifier. Subsequent POSTs for other state changes repeat this value. The receiver
+compares it with the previous stored value for each UUPC, including after a server
+restart. UIDs are stored as text, preserving leading zeros. `00000000_0` is the
+firmware's initial sentinel value.
 
-Następny etap: przypisywanie UUPC do pokoi, sesje drużyn i obsługa opasek; przed
-sterowaniem grą test fizycznego UUPC i ustalenie potwierdzania startu/wyniku rundy.
+The first unknown value establishes a baseline without emitting an event. This
+prevents an old card placement from being treated as a new entry, but the first
+actual reading may be skipped. After startup, check connectivity and perform a
+trial card placement and removal before operational use. The panel also displays
+the last card state.
+
+Firmware POSTs contain no event sequence number, boot ID or reading timestamp.
+Stored timestamps represent receipt at the computer. Lost or reordered transitions
+cannot be reconstructed unambiguously from the last state alone; delivery is not
+guaranteed exactly once. The firmware HTTP queue is bounded and provides no durable
+replay. The `/rfid/history` endpoint is not yet used. This stage does not award
+points or open doors based on these events.
+
+The current firmware forwards 4 UID bytes and does not identify the reader port.
+Expander rosters shaped as `{id,full,sensors}` are acknowledged but are not processed
+as the main UUPC state.
+
+Next steps: assign UUPC devices to rooms, introduce team sessions and manage
+wristbands. Physical RFID communication has been verified. Before controlling
+games, verify round-control behavior and establish how round starts and results
+will be confirmed.
