@@ -2,9 +2,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 // Deliberately no UDP discovery and no hardware commands: only synthetic HTTP POSTs.
 const target = new URL(process.argv[2] || 'http://127.0.0.1:4000');
-if (target.protocol !== 'http:') throw new Error('Symulator wymaga adresu HTTP.');
+if (target.protocol !== 'http:') throw new Error('The simulator requires an HTTP URL.');
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname)) {
-  throw new Error('Symulator jest ograniczony do loopback: localhost, 127.0.0.1 lub [::1].');
+  throw new Error('The simulator is restricted to loopback: localhost, 127.0.0.1 or [::1].');
 }
 target.pathname = '/';
 target.search = '';
@@ -22,12 +22,12 @@ const snapshot = (rfid) => ({
   message: { type: '', content: '', RFID: rfid },
 });
 
-console.log(`Symulator UUPC (jeden RFID), cel: ${target.origin}`);
+console.log(`UUPC simulator (one RFID reader), target: ${target.origin}`);
 for (const [label, rfid] of [
-  ['Stan początkowy', '00000000_0'],
-  ['Przyłożenie karty', '12AB34CD_1'],
-  ['Powtórzenie pełnego stanu — bez nowego przyłożenia', '12AB34CD_1'],
-  ['Zabranie karty', '12AB34CD_0'],
+  ['Initial state', '00000000_0'],
+  ['Card placement', '12AB34CD_1'],
+  ['Repeated full snapshot — no new placement', '12AB34CD_1'],
+  ['Card removal', '12AB34CD_0'],
 ]) {
   const response = await fetch(target, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -38,4 +38,4 @@ for (const [label, rfid] of [
   console.log(`${label}: ${rfid} → HTTP ${response.status}`);
   await delay(750);
 }
-console.log('Koniec. Oczekiwane dwa nowe zdarzenia: przyłożenie i zabranie.');
+console.log('Done. Expect two new events: placement and removal.');
