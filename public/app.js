@@ -25,12 +25,13 @@ function renderDevices(devices) {
     card.append(node('h3', device.id), node('p', device.address || 'Adres nieznany'));
     const details = node('dl');
     const rfid = device.lastRfid;
+    const noReading = !rfid || (rfid.uid === '00000000' && !rfid.placed);
     const fields = [
       ['Stan maszyny', device.machineState ?? '—'],
       ['Firmware / sprzęt', `${device.softwareVersion ?? '—'} / ${device.hardwareVersion ?? '—'}`],
       ['Ostatni kontakt', time(device.lastSeenAt)],
-      ['Ostatni UID', rfid?.uid ?? '—'],
-      ['Stan karty', rfid ? (rfid.placed ? 'Przyłożona' : 'Zabrana') : 'Nieznany'],
+      ['Ostatni UID', noReading ? '—' : rfid.uid],
+      ['Stan karty', noReading ? 'Brak odczytu' : (rfid.placed ? 'Przyłożona' : 'Zabrana')],
     ];
     for (const [label, value] of fields) details.append(node('dt', label), node('dd', value));
     card.append(details);
@@ -63,17 +64,27 @@ async function json(path) {
 
 async function refresh() {
   try {
-    const [, devices, events] = await Promise.all([json('/api/health'), json('/api/devices'), json('/api/events')]);
+    const [health, devices, events] = await Promise.all([json('/api/health'), json('/api/devices'), json('/api/events')]);
     if (!Array.isArray(devices) || !Array.isArray(events)) throw new Error('Nieprawidłowy format odpowiedzi');
     renderDevices(devices);
     renderEvents(events);
     byId('connection').textContent = '● Serwer lokalny dostępny';
     byId('connection').className = 'badge';
+    const discoveryLabels = {
+      active: 'Wykrywanie UDP aktywne',
+      disabled: 'Wykrywanie UDP wyłączone — serwer przyjmuje HTTP',
+      degraded: 'Wykrywanie UDP niedostępne — sprawdź konfigurację sieci',
+    };
+    byId('discovery').textContent = discoveryLabels[health.discovery] ?? 'Stan wykrywania UDP nieznany';
+    if (health.discoveryError) byId('discovery').textContent += `: ${health.discoveryError}`;
+    byId('discovery').className = health.discovery === 'active' ? '' : 'discovery-warning';
     byId('error').hidden = true;
     byId('updated').textContent = `Odświeżono ${new Date().toLocaleTimeString('pl-PL')}`;
   } catch {
     byId('connection').textContent = '● Brak połączenia z serwerem';
     byId('connection').className = 'badge offline';
+    byId('discovery').textContent = 'Stan wykrywania UDP nieznany — brak połączenia z serwerem';
+    byId('discovery').className = 'discovery-warning';
     byId('error').textContent = 'Nie udało się pobrać danych. Wyświetlone informacje mogą być nieaktualne. Ponawiam połączenie automatycznie.';
     byId('error').hidden = false;
     byId('active-count').textContent = '—';
