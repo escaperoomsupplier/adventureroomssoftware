@@ -54,7 +54,6 @@ export async function startServer({
   const reception = new ReceptionStore(store.db);
   const rooms = new RoomStore(store.db);
   const rounds = new RoundStore(store.db);
-  rounds.reconcile({ restart: true });
   let discoveryHandle;
   let discoveryError = null;
   const subscribers = new Set();
@@ -230,6 +229,8 @@ export async function startServer({
       server.once('error', reject);
       server.listen(port, host, () => { server.removeListener('error', reject); accept(); });
     });
+    // A failed second listener must not interrupt the running server's rounds.
+    rounds.reconcile({ restart: true });
     if (discovery) {
       discoveryHandle = await startDiscovery({ ...discoveryOptions,
         onDevice: device => {

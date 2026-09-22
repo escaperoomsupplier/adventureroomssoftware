@@ -130,7 +130,9 @@ async function closeRound(id) {
     if (!data.round) throw new TypeError('Missing round response');
     rounds = rounds.map((round) => round.id === data.round.id ? data.round : round);
     renderRounds();
-    $('rounds-message').textContent = 'Software tracking closed. No hardware command was sent.';
+    $('rounds-message').textContent = data.round.status === 'closed' && data.round.reason === 'operator_closed'
+      ? 'Software tracking closed. No hardware command was sent.'
+      : `Tracking has already finished: ${label(statuses, data.round.status)}.`;
   } catch (error) {
     $('rounds-error').textContent = error.name === 'TimeoutError' || error instanceof TypeError || error instanceof SyntaxError
       ? 'Could not confirm whether tracking was closed. Check the latest round status after reconnection before retrying.' : error.message;

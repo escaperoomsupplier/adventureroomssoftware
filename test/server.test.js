@@ -175,6 +175,8 @@ test('server restart retains history and requires review of unfinished tracking'
   await prepareRound(app);
   await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
   assert.equal(app.rounds.listRounds()[0].status, 'tracking');
+  await assert.rejects(startServer({ ...options, port: app.address.port }), { code: 'EADDRINUSE' });
+  assert.equal(app.rounds.listRounds()[0].status, 'tracking');
   await app.close();
   app = await startServer(options);
   const round = app.rounds.listRounds()[0];
