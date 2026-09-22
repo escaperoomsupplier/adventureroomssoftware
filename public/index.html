@@ -22,6 +22,13 @@
       </div>
       <div id="sessions" class="session-list"><p class="empty">Waiting for sessions…</p></div>
     </section>
+    <section id="room-settings" aria-labelledby="rooms-title">
+      <div class="section-heading"><h2 id="rooms-title">Rooms</h2><span>Configuration only · No hardware commands</span></div>
+      <p class="field-hint">Assign a controller to each room. Reported device states do not indicate room occupancy or readiness.</p>
+      <p id="room-error" role="alert" hidden></p><p id="room-message" role="status"></p>
+      <form id="room-form" class="reception-box room-form"><h3 id="room-form-title">Create a room</h3><label for="room-name">Room name</label><input id="room-name" required minlength="1" maxlength="80" autocomplete="off"><label for="room-controller">Controller (optional)</label><select id="room-controller"><option value="">No controller assigned</option></select><label class="room-checkbox" for="room-enabled"><input id="room-enabled" type="checkbox" checked> Enabled in configuration</label><button id="room-save" type="submit">Create room</button><button id="room-cancel" type="button" class="secondary" hidden>Cancel edit</button></form>
+      <div id="rooms" class="session-list"><p class="empty">Waiting for room settings…</p></div>
+    </section>
     <p id="discovery" role="status">Checking UDP discovery…</p>
     <div class="summary"><div><span id="device-count">—</span><small>known controllers</small></div><div><span id="active-count">—</span><small>active in the last 25 s</small></div><div><span id="event-count">—</span><small>events displayed</small></div></div>
     <section aria-labelledby="devices-title"><div class="section-heading"><h2 id="devices-title">UUPC controllers</h2><span id="updated">Waiting for data</span></div><p id="error" role="alert" hidden></p><div id="devices" class="devices"><p class="empty">Waiting for device data…</p></div></section>
