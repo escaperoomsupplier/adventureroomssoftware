@@ -35,12 +35,12 @@ On macOS:
 DISCOVERY=0 HOST=127.0.0.1 PORT=14000 DATA_DIR=data-demo npm start
 ```
 
-Start the local server, then run in a second terminal:
+With the demo server above running, use a second terminal:
 
 ```sh
+node scripts/simulate-upc.js http://127.0.0.1:14000
+# Default server on port 4000, when explicitly using it for simulations:
 npm run simulate
-# Another local port:
-node scripts/simulate-upc.js http://127.0.0.1:4100
 ```
 
 Node.js 24.11 or newer is required. The simulator accepts loopback destinations only and sends four full firmware-shaped packets to `POST /`: baseline `00000000_0`, placement `12AB34CD_1`, an identical snapshot, and removal `12AB34CD_0`. Its device ID is `SIMULATOR00001` (14 characters). Expect two new RFID events; the repeated snapshot is not a new placement. The simulator does not test UDP, discover devices or control hardware. The data is synthetic; do not use real wristband identifiers in examples committed to Git.

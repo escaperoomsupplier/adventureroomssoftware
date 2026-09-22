@@ -187,6 +187,18 @@ test('server restart retains history and requires review of unfinished tracking'
   assert.equal(app.rounds.listScans().length, 1);
 });
 
+test('session expiry closes tracking and notifies live clients without further device traffic', async t => {
+  const { app, url } = await fixture(t);
+  const { session } = await prepareRound(app);
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  const live = await openLive(t, url);
+  assert.equal((await live.next()).rounds[0].status, 'tracking');
+  app.store.db.prepare('UPDATE reception_sessions SET ends_at=? WHERE id=?').run(Date.now() - 1, session.id);
+  const state = await live.next();
+  assert.equal(state.rounds[0].reason, 'session_expired');
+  assert.equal(state.sessions[0].status, 'expired');
+});
+
 test('startup bind failure releases database and does not announce discovery', async t => {
   const { app } = await fixture(t);
   await assert.rejects(startServer({ host: '127.0.0.1', port: app.address.port, databasePath: ':memory:', discovery: false, logger: silent }), { code: 'EADDRINUSE' });
