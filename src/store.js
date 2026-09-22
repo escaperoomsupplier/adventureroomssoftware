@@ -30,7 +30,8 @@ export class DeviceStore {
     return this.#get(String(id));
   }
 
-  recordSnapshot(snapshot, address) {
+  recordSnapshot(snapshot, address, onRecorded) {
+    if (onRecorded !== undefined && typeof onRecorded !== 'function') throw new TypeError('Snapshot callback must be a function');
     this.#identity(snapshot.id, address);
     const id = String(snapshot.id);
     const rfid = snapshot.rfid;
@@ -64,8 +65,11 @@ export class DeviceStore {
         event = { sequence: Number(result.lastInsertRowid), deviceId: id, type,
           uid: rfid.uid, placed: rfid.placed, receivedAt };
       }
+      const device = this.#get(id);
+      const result = onRecorded?.({ device, event, previous });
+      if (result && typeof result.then === 'function') throw new TypeError('Snapshot callback must be synchronous');
       this.db.exec('COMMIT');
-      return { device: this.#get(id), event };
+      return { device, event };
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;

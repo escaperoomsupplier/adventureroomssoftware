@@ -9,6 +9,22 @@ const address = '127.0.0.1';
 const snapshot = (uid, placed) => ({ id: 'upc1', softwareVersion: '5.1', hardwareVersion: 5,
   machineState: 1, rfid: uid ? { uid, placed } : null, raw: { never: 'persist raw payloads' } });
 
+test('snapshot callback sees previous and inserted state before commit and rejects asynchronous results', () => {
+  const store = new DeviceStore(':memory:');
+  try {
+    store.recordSnapshot(snapshot('AA', false), address);
+    const before = store.listDevices();
+    assert.throws(() => store.recordSnapshot(snapshot('AA', true), address, data => {
+      assert.deepEqual(data.previous, before[0]);
+      assert.equal(data.device.lastRfid.placed, true);
+      assert.equal(store.listEvents()[0].sequence, data.event.sequence);
+      return Promise.resolve();
+    }), /synchronous/);
+    assert.deepEqual(store.listDevices(), before);
+    assert.deepEqual(store.listEvents(), []);
+  } finally { store.close(); }
+});
+
 test('baseline, duplicate snapshots and restart do not generate placements', () => {
   const dir = mkdtempSync(join(tmpdir(), 'adventure-store-'));
   let store;
