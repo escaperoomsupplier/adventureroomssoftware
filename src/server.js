@@ -6,6 +6,7 @@ import { DeviceStore } from './store.js';
 import { parseSnapshot } from './protocol.js';
 import { startDiscovery } from './discovery.js';
 import { ReceptionStore } from './reception.js';
+import { RoomStore } from './rooms.js';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const assets = new Map([
@@ -13,6 +14,7 @@ const assets = new Map([
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/reception.js', ['reception.js', 'text/javascript; charset=utf-8']],
+  ['/rooms.js', ['rooms.js', 'text/javascript; charset=utf-8']],
 ]);
 const MAX_BODY = 16 * 1024;
 
@@ -48,12 +50,13 @@ export async function startServer({
   if (databasePath !== ':memory:') await mkdir(dirname(databasePath), { recursive: true });
   const store = new DeviceStore(databasePath);
   const reception = new ReceptionStore(store.db);
+  const rooms = new RoomStore(store.db);
   let discoveryHandle;
   let discoveryError = null;
   const subscribers = new Set();
   const health = () => ({ status: 'ok', local: true, transport: 'http-ercc',
     discovery: discovery ? (discoveryError ? 'degraded' : 'active') : 'disabled', discoveryError });
-  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: store.listDevices(), events: store.listEvents(100), sessions: reception.listSessions() })}\n\n`;
+  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: store.listDevices(), events: store.listEvents(100), sessions: reception.listSessions(), rooms: rooms.listRooms() })}\n\n`;
   const sendFrame = (res, frame) => {
     // Disconnect slow readers instead of allowing an unbounded outgoing queue.
     if (res.destroyed || res.writableLength > 256 * 1024) {
@@ -75,6 +78,25 @@ export async function startServer({
   const server = http.createServer(async (req, res) => {
     try {
       const pathname = new URL(req.url, 'http://localhost').pathname;
+      if (pathname === '/api/rooms' && req.method === 'GET') return json(res, 200, rooms.listRooms());
+      if ((pathname === '/api/rooms' || pathname.startsWith('/api/rooms/')) && ['POST', 'PATCH'].includes(req.method)) {
+        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
+          return json(res, 403, { error: 'Cross-origin room changes are not allowed' });
+        }
+        if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) {
+          return json(res, 415, { error: 'Expected application/json' });
+        }
+        const body = await readJson(req);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Expected a JSON object' });
+        const route = /^\/api\/rooms\/([A-Za-z0-9-]{1,80})$/.exec(pathname);
+        let room;
+        if (pathname === '/api/rooms' && req.method === 'POST') room = rooms.createRoom(body);
+        else if (route && req.method === 'PATCH') room = rooms.updateRoom(route[1], body);
+        else return json(res, 404, { error: 'Not found' });
+        json(res, req.method === 'POST' ? 201 : 200, { room });
+        publish();
+        return;
+      }
       if (pathname === '/api/reception/sessions' && req.method === 'GET') {
         return json(res, 200, reception.listSessions());
       }
@@ -195,7 +217,7 @@ export async function startServer({
     throw error;
   }
   let closed = false;
-  return { server, store, reception, address: server.address(), async close() {
+  return { server, store, reception, rooms, address: server.address(), async close() {
     if (closed) return;
     closed = true;
     await discoveryHandle?.close();

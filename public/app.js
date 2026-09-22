@@ -1,5 +1,6 @@
 'use strict';
 import { updateReception } from './reception.js';
+import { updateRooms } from './rooms.js';
 
 const byId = (id) => document.getElementById(id);
 const time = (value) => {
@@ -72,13 +73,14 @@ function disconnected() {
 }
 live.onmessage = message => {
   try {
-    const { health, devices, events, sessions = [] } = JSON.parse(message.data);
+    const { health, devices, events, sessions = [], rooms = [] } = JSON.parse(message.data);
     if (!health || !Array.isArray(devices) || !Array.isArray(events)) throw new Error('Invalid live state');
     lastDevices = devices;
     connected = true;
     renderDevices(devices);
     renderEvents(events);
     updateReception({ devices, sessions });
+    updateRooms({ devices, rooms });
     byId('connection').textContent = '● Live connection to local server';
     byId('connection').className = 'badge';
     const discoveryLabels = {
