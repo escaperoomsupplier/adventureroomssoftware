@@ -7,6 +7,7 @@ import { parseSnapshot } from './protocol.js';
 import { startDiscovery } from './discovery.js';
 import { ReceptionStore } from './reception.js';
 import { RoomStore } from './rooms.js';
+import { RoundStore } from './rounds.js';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const assets = new Map([
@@ -15,6 +16,7 @@ const assets = new Map([
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/reception.js', ['reception.js', 'text/javascript; charset=utf-8']],
   ['/rooms.js', ['rooms.js', 'text/javascript; charset=utf-8']],
+  ['/rounds.js', ['rounds.js', 'text/javascript; charset=utf-8']],
 ]);
 const MAX_BODY = 16 * 1024;
 
@@ -51,12 +53,14 @@ export async function startServer({
   const store = new DeviceStore(databasePath);
   const reception = new ReceptionStore(store.db);
   const rooms = new RoomStore(store.db);
+  const rounds = new RoundStore(store.db);
+  rounds.reconcile({ restart: true });
   let discoveryHandle;
   let discoveryError = null;
   const subscribers = new Set();
   const health = () => ({ status: 'ok', local: true, transport: 'http-ercc',
     discovery: discovery ? (discoveryError ? 'degraded' : 'active') : 'disabled', discoveryError });
-  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: store.listDevices(), events: store.listEvents(100), sessions: reception.listSessions(), rooms: rooms.listRooms() })}\n\n`;
+  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: store.listDevices(), events: store.listEvents(100), sessions: reception.listSessions(), rooms: rooms.listRooms(), rounds: rounds.listRounds(), scans: rounds.listScans() })}\n\n`;
   const sendFrame = (res, frame) => {
     // Disconnect slow readers instead of allowing an unbounded outgoing queue.
     if (res.destroyed || res.writableLength > 256 * 1024) {
@@ -75,9 +79,33 @@ export async function startServer({
     for (const res of subscribers) sendFrame(res, ': keep-alive\n\n');
   }, 15000);
   heartbeat.unref();
+  // Expired sessions and stale controllers must release tracking without new POSTs.
+  const reconciliation = setInterval(() => {
+    try { if (rounds.reconcile()) publish(); }
+    catch (error) { logger.error('Round reconciliation failed:', error.message); }
+  }, 1000);
+  reconciliation.unref();
   const server = http.createServer(async (req, res) => {
     try {
       const pathname = new URL(req.url, 'http://localhost').pathname;
+      if (pathname === '/api/rounds' && req.method === 'GET') {
+        return json(res, 200, { rounds: rounds.listRounds(), scans: rounds.listScans() });
+      }
+      const closeRoute = /^\/api\/rounds\/([A-Za-z0-9-]{1,80})\/close$/.exec(pathname);
+      if (closeRoute && req.method === 'POST') {
+        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
+          return json(res, 403, { error: 'Cross-origin round changes are not allowed' });
+        }
+        if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) {
+          return json(res, 415, { error: 'Expected application/json' });
+        }
+        const body = await readJson(req);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Expected a JSON object' });
+        const round = rounds.closeRound(closeRoute[1]);
+        json(res, 200, { round });
+        publish();
+        return;
+      }
       if (pathname === '/api/rooms' && req.method === 'GET') return json(res, 200, rooms.listRooms());
       if ((pathname === '/api/rooms' || pathname.startsWith('/api/rooms/')) && ['POST', 'PATCH'].includes(req.method)) {
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
@@ -93,6 +121,7 @@ export async function startServer({
         if (pathname === '/api/rooms' && req.method === 'POST') room = rooms.createRoom(body);
         else if (route && req.method === 'PATCH') room = rooms.updateRoom(route[1], body);
         else return json(res, 404, { error: 'Not found' });
+        rounds.reconcile();
         json(res, req.method === 'POST' ? 201 : 200, { room });
         publish();
         return;
@@ -128,6 +157,7 @@ export async function startServer({
         } else if (route && route[2] === 'end' && !route[3] && req.method === 'POST') {
           session = reception.endSession(route[1]);
         } else return json(res, 404, { error: 'Not found' });
+        rounds.reconcile();
         json(res, status, { session });
         publish();
         return;
@@ -149,7 +179,8 @@ export async function startServer({
         let snapshot;
         try { snapshot = parseSnapshot(payload); }
         catch { return json(res, 400, { error: 'Invalid UUPC snapshot' }); }
-        store.recordSnapshot(snapshot, req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? 'unknown');
+        store.recordSnapshot(snapshot, req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? 'unknown',
+          recorded => rounds.applySnapshot(recorded));
         // ACK only after SQLite commit. UUPC checks for literal "200 OK".
         json(res, 200, { status: 'ok' });
         publish();
@@ -202,7 +233,7 @@ export async function startServer({
     if (discovery) {
       discoveryHandle = await startDiscovery({ ...discoveryOptions,
         onDevice: device => {
-          try { store.recordDiscovery(device); publish(); }
+          try { rounds.reconcile(); store.recordDiscovery(device); publish(); }
           catch (error) { logger.error('Discovery storage failed:', error.message); }
         },
         onError: error => { discoveryError = error.message; logger.error('UDP discovery:', error.message); publish(); },
@@ -210,6 +241,7 @@ export async function startServer({
     }
   } catch (error) {
     clearInterval(heartbeat);
+    clearInterval(reconciliation);
     for (const res of subscribers) res.destroy();
     subscribers.clear();
     if (server.listening) await new Promise(done => server.close(done));
@@ -217,11 +249,12 @@ export async function startServer({
     throw error;
   }
   let closed = false;
-  return { server, store, reception, rooms, address: server.address(), async close() {
+  return { server, store, reception, rooms, rounds, address: server.address(), async close() {
     if (closed) return;
     closed = true;
     await discoveryHandle?.close();
     clearInterval(heartbeat);
+    clearInterval(reconciliation);
     for (const res of subscribers) res.end();
     subscribers.clear();
     await new Promise(done => server.close(done));

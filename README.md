@@ -4,7 +4,8 @@ The initial foundation includes ERCC-compatible UUPC discovery, an HTTP POST
 receiver, a local SQLite database, reception tools and a diagnostics panel. HTTP is the permanent
 transport. Runtime operation uses no MQTT, cloud services or external assets.
 One RFID reader per UUPC is assumed. Reception supports team sessions and RFID card
-assignments. This stage does not yet include scoring, lock control or an Electron installer.
+assignments, room configuration and passive round tracking. This stage does not yet
+include scoring, lock control or an Electron installer.
 
 ## Running on Windows / macOS
 
@@ -127,9 +128,41 @@ Room configuration persists in the local database and updates all open panels li
 
 Enabled is an operator setting. Contact status and the last reported machine state
 are displayed separately; neither proves that a room is empty or ready for a team.
-Saving configuration sends no commands to hardware. RFID scans do not yet start
-rounds or award points.
+Saving configuration sends no commands to hardware. RFID scans can register a team
+for software tracking; they do not start the hardware or award points.
 
-Next steps: add round tracking and scoring.
+## Round tracking
+
+Assign a controller to an enabled room, create an active team session and assign
+its card. With the controller reporting **Armed (0)**, remove and tap the card again.
+A new, deduplicated placement registers that team in the room. Initial RFID
+baselines and repeated snapshots never register a team. A room and a team may each
+have only one tracked round at a time. The panel explains rejected scans, including
+unknown cards, inactive sessions, occupied tracking and controllers already in progress.
+The first HTTP snapshot after an application restart or a detected contact gap only
+restores the tracking baseline. Remove and tap the card again after reconnecting;
+a changed last-card value received during recovery is not proof of a fresh arrival.
+
+Registration time measures time since receipt of the card tap, not a confirmed game
+start. The first later `0 → 1` transition records observed puzzle activity. A later
+`0 → 2` or `1 → 2` transition ends tracking as **Win reported**, once only. Simple
+puzzles can win without reporting state 1. A reset (`1 → 0`) is **Reset observed**,
+not a failure; programming mode is **Needs review**. Forced wins are indistinguishable
+from normal wins in firmware callbacks. The panel awards no points.
+
+An application restart, more than 25 seconds without controller contact, or disabling
+or reassigning a room ends unfinished tracking as **Needs review**. Ending or expiring
+a team session closes its tracking. These checks run without browser activity.
+**Close tracking** ends only the software record; it does not stop, reset or release
+hardware. Releasing or reassigning a wristband does not transfer an existing round.
+Historical team and room names are preserved when settings later change.
+
+Device snapshots, RFID events and tracking decisions commit in one SQLite transaction
+before HTTP acknowledgement. This prevents partial local writes, but cannot recover
+packets the firmware never delivered. UDP heartbeats indicate contact, not guaranteed
+HTTP delivery. Unobserved resets, short outages and reordered snapshots may still
+make attribution uncertain; this is an observation log, not authoritative game control.
+
+Next steps: verified hardware round control and configurable scoring.
 Physical RFID communication has been verified. Before controlling games, verify
 round-control behavior and establish how round starts and results will be confirmed.
