@@ -117,6 +117,19 @@ Session deadlines and assignment history persist in SQLite across restarts.
 The server enforces expiry even if no panel is open. These controls do not start
 a room, open a door or award points.
 
-Next steps: assign UUPC devices to rooms and add round tracking and scoring.
+## Rooms
+
+Create a room with a name, select a discovered controller or leave it unassigned,
+and save its enabled setting. Select an existing room to rename it, change its
+controller or disable it. Each controller can belong to at most one room, including
+disabled rooms. Select no controller and save to release an assignment for reuse.
+Room configuration persists in the local database and updates all open panels live.
+
+Enabled is an operator setting. Contact status and the last reported machine state
+are displayed separately; neither proves that a room is empty or ready for a team.
+Saving configuration sends no commands to hardware. RFID scans do not yet start
+rounds or award points.
+
+Next steps: add round tracking and scoring.
 Physical RFID communication has been verified. Before controlling games, verify
 round-control behavior and establish how round starts and results will be confirmed.

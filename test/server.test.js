@@ -174,3 +174,37 @@ test('reception mutations enforce card ownership and publish session updates', a
   assert.deepEqual(state.sessions.find(s => s.id === second.id).cards, []);
   assert.equal((await (await fetch(`${url}/api/reception/sessions`)).json()).length, 2);
 });
+
+test('room configuration validates controller ownership and publishes committed changes', async t => {
+  const { app, url } = await fixture(t);
+  await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0')));
+  const live = await openLive(t, url);
+  assert.deepEqual((await live.next()).rooms, []);
+  const write = (path, body, method = 'POST', headers = {}) => fetch(`${url}${path}`, {
+    method, headers: { 'Content-Type': 'application/json', Origin: url, ...headers }, body: JSON.stringify(body),
+  });
+  const config = { name: 'Library', deviceId: id, enabled: true };
+  const response = await write('/api/rooms', config);
+  assert.equal(response.status, 201);
+  const { room } = await response.json();
+  assert.deepEqual((await live.next()).rooms, [room]);
+  assert.equal((await write('/api/rooms', config)).status, 409);
+  assert.equal((await write('/api/rooms', { ...config, deviceId: 'UNKNOWN0000000' })).status, 400);
+  assert.equal((await write('/api/rooms', config, 'POST', { Origin: 'http://example.invalid' })).status, 403);
+  assert.equal((await write('/api/rooms', config, 'POST', { 'Content-Type': 'text/plain' })).status, 415);
+  assert.equal((await write('/api/rooms', null)).status, 400);
+  assert.equal((await write(`/api/rooms/${room.id}`, { ...config, enabled: 'false' }, 'PATCH')).status, 400);
+  assert.equal((await write('/api/rooms/missing', config, 'PATCH')).status, 404);
+  assert.deepEqual(await (await fetch(`${url}/api/rooms`)).json(), [room]);
+  const updated = await write(`/api/rooms/${room.id}`, { name: 'Archive', deviceId: null, enabled: false }, 'PATCH');
+  assert.equal(updated.status, 200);
+  const state = await live.next();
+  assert.equal(state.rooms[0].name, 'Archive');
+  assert.equal(state.rooms[0].enabled, false);
+  assert.equal(state.rooms[0].deviceId, null);
+  assert.equal((await write('/api/rooms', config)).status, 201);
+  await live.next();
+  // Configuration does not fabricate controller state or RFID events.
+  assert.equal(app.store.listDevices()[0].snapshotCount, 1);
+  assert.deepEqual(app.store.listEvents(), []);
+});
