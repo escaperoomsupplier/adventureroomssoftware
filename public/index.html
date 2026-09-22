@@ -22,6 +22,15 @@
       </div>
       <div id="sessions" class="session-list"><p class="empty">Waiting for sessions…</p></div>
     </section>
+    <section id="round-tracking" aria-labelledby="rounds-title">
+      <div class="section-heading"><h2 id="rounds-title">Round tracking</h2><span>Software tracking from card taps</span></div>
+      <p class="field-hint">Register a card tap while the controller reports Armed. Tracking begins with an accepted tap, not a confirmed hardware start. No hardware commands or door control are sent. Reported states may miss transitions; a live server connection does not confirm controller contact.</p>
+      <p id="rounds-stale" class="discovery-warning" role="status">Waiting for live round data. Closing is unavailable.</p>
+      <p id="rounds-error" role="alert" hidden></p><p id="rounds-message" role="status"></p>
+      <div id="active-rounds" class="session-list"><p class="empty">Waiting for round data…</p></div>
+      <h3 class="round-subtitle">Recent completed tracking</h3><div id="round-history" class="table-wrap"></div>
+      <h3 class="round-subtitle">Recent card scan decisions</h3><div id="round-scans" class="table-wrap"></div>
+    </section>
     <section id="room-settings" aria-labelledby="rooms-title">
       <div class="section-heading"><h2 id="rooms-title">Rooms</h2><span>Configuration only · No hardware commands</span></div>
       <p class="field-hint">Assign a controller to each room. Reported device states do not indicate room occupancy or readiness.</p>
