@@ -21,7 +21,7 @@ function render() {
   signature = next;
   const roomList = $('overview-room-list');
   roomList.replaceChildren();
-  for (const room of rooms) {
+  for (const room of rooms.slice(0, 6)) {
     const device = devices.find(d => d.id === room.deviceId);
     const round = rounds.find(r => r.roomId === room.id && r.status === 'tracking');
     const card = node('article', undefined, 'overview-room');
@@ -34,6 +34,7 @@ function render() {
     card.append(link);
     roomList.append(card);
   }
+  if (rooms.length > 6) roomList.append(node('p', `Showing 6 of ${rooms.length} rooms. Open Rooms to see all spaces.`, 'field-hint'));
   if (!rooms.length) {
     const empty = node('div', undefined, 'empty-state');
     empty.append(node('h3', 'Make room for adventure'), node('p', 'Add your first room and connect its UUPC to see it here.', 'field-hint'));
