@@ -75,13 +75,15 @@ test('acknowledges firmware sub-sensor roster without creating RFID events', asy
 test('serves local assets, reports discovery disabled and exposes no command endpoint', async t => {
   const { url } = await fixture(t);
   assert.equal((await (await fetch(`${url}/api/health`)).json()).discovery, 'disabled');
-  for (const asset of ['/', '/app.js', '/style.css', '/reception.js', '/rooms.js', '/rounds.js']) {
+  for (const asset of ['/', '/reception', '/rounds', '/rooms', '/devices', '/app.js', '/style.css', '/reception.js', '/rooms.js', '/rounds.js', '/navigation.js', '/overview.js']) {
     const response = await fetch(`${url}${asset}`);
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-security-policy'), /default-src 'self'/);
     await response.text();
   }
   assert.equal((await fetch(`${url}/api/command`, { method: 'POST' })).status, 404);
+  assert.equal((await fetch(`${url}/unknown-page`)).status, 404);
+  assert.equal((await fetch(`${url}/reception`, { method: 'POST' })).status, 404);
 });
 
 async function prepareRound(app) {

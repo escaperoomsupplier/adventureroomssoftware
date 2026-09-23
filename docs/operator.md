@@ -4,6 +4,22 @@ The panel on the application server (default: `http://127.0.0.1:4000`) manages t
 
 Updates arrive immediately through server-sent events (SSE over HTTP). A full snapshot is sent on connection and reconnection to restore the current view. The panel does not poll every two seconds.
 
+## Navigation
+
+The sidebar separates daily tasks into five pages:
+
+- **Overview** (`/`): active sessions, tracked rounds, enabled rooms and controller contact at a glance.
+- **Reception** (`/reception`): create sessions and assign wristbands.
+- **Rounds** (`/rounds`): active tracking, completed outcomes and scan decisions.
+- **Rooms** (`/rooms`): room names, controller assignments and enabled settings.
+- **Diagnostics** (`/devices`): detailed UUPC status and raw RFID events.
+
+Each page can be bookmarked or opened directly. Back and Forward work normally.
+Switching pages keeps unfinished form entries and maintains one live connection.
+Reloading the browser discards unsaved entries. Overview counters show a dash when
+the live connection is unavailable; connected controllers are not necessarily ready
+or unoccupied rooms.
+
 One RFID reader per UUPC is assumed. A controller is marked inactive after 25 seconds without an update. This is diagnostic information, not proof of a failure. If the server connection is lost, the last data remains visible with a warning. Event timestamps indicate receipt at the server, not the reading time on the device.
 
 ## Team sessions and cards

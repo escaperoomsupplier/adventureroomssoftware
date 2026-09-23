@@ -1,4 +1,6 @@
 'use strict';
+import './navigation.js';
+import { updateOverview } from './overview.js';
 import { updateReception } from './reception.js';
 import { updateRooms } from './rooms.js';
 import { updateRounds } from './rounds.js';
@@ -64,6 +66,7 @@ let connected = false;
 const live = new EventSource('/api/live');
 function disconnected() {
   connected = false;
+  updateOverview({ connected: false });
   updateRounds({ connected: false });
   byId('connection').textContent = '● Reconnecting to local server';
   byId('connection').className = 'badge offline';
@@ -84,6 +87,7 @@ live.onmessage = message => {
     updateReception({ devices, sessions });
     updateRooms({ devices, rooms });
     updateRounds({ rounds, scans, connected: true });
+    updateOverview({ devices, sessions, rooms, rounds, scans, connected: true });
     byId('connection').textContent = '● Live connection to local server';
     byId('connection').className = 'badge';
     const discoveryLabels = {
