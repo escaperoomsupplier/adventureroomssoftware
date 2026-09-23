@@ -12,11 +12,14 @@ import { RoundStore } from './rounds.js';
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
+  ...['/reception', '/rounds', '/rooms', '/devices'].map(path => [path, ['index.html', 'text/html; charset=utf-8']]),
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/reception.js', ['reception.js', 'text/javascript; charset=utf-8']],
   ['/rooms.js', ['rooms.js', 'text/javascript; charset=utf-8']],
   ['/rounds.js', ['rounds.js', 'text/javascript; charset=utf-8']],
+  ['/navigation.js', ['navigation.js', 'text/javascript; charset=utf-8']],
+  ['/overview.js', ['overview.js', 'text/javascript; charset=utf-8']],
 ]);
 const MAX_BODY = 16 * 1024;
 
