@@ -17,6 +17,7 @@ export class RoomStore {
     for (const [key, value] of Object.entries({ x: 0, y: 0, width: 240, height: 160 })) {
       if (!columns.has(key)) db.exec(`ALTER TABLE rooms ADD COLUMN ${key} INTEGER NOT NULL DEFAULT ${value}`);
     }
+    db.exec('UPDATE rooms SET enabled=1 WHERE enabled<>1');
   }
 
   createRoom(input) {
@@ -40,6 +41,16 @@ export class RoomStore {
         .run(values.name, values.deviceId, Number(values.enabled), new Date().toISOString(), values.x, values.y, values.width, values.height, id);
       if (this.db.prepare("SELECT name FROM sqlite_master WHERE name='reader_settings'").get()) {
         this.db.prepare('UPDATE reader_settings SET x=MIN(x,?),y=MIN(y,?) WHERE room_id=?').run(values.width, values.height, id);
+      }
+      if (this.db.prepare("SELECT name FROM sqlite_master WHERE name='configuration_items'").get()) {
+        for (const row of this.db.prepare("SELECT id,json FROM configuration_items WHERE kind='screens'").all()) {
+          const screen = JSON.parse(row.json);
+          if (screen.roomId === id) {
+            screen.x = Math.min(Math.max(0, screen.x ?? 0), values.width);
+            screen.y = Math.min(Math.max(0, screen.y ?? 0), values.height);
+            this.db.prepare("UPDATE configuration_items SET json=? WHERE kind='screens' AND id=?").run(JSON.stringify(screen), row.id);
+          }
+        }
       }
       return this.getRoom(id);
     });
@@ -67,12 +78,12 @@ export class RoomStore {
     }
     if (typeof enabled !== 'boolean') fail(400, 'Enabled must be a boolean.');
     const geometry = {};
-    for (const [key, [fallback, min, max]] of Object.entries({ x: [0,0,10000], y: [0,0,10000], width: [240,120,2000], height: [160,80,2000] })) {
+    for (const [key, [fallback, min, max]] of Object.entries({ x: [1000,-10000,10000], y: [1000,-10000,10000], width: [240,120,2000], height: [160,80,2000] })) {
       const value = defaults && input[key] === undefined ? fallback : input[key];
       if (!Number.isInteger(value) || value < min || value > max) fail(400, `Invalid room ${key}.`);
       geometry[key] = value;
     }
-    return { name: input.name.trim(), deviceId, enabled, ...geometry };
+    return { name: input.name.trim(), deviceId, enabled: true, ...geometry };
   }
 
   #checkDevice(deviceId, roomId = null) {
