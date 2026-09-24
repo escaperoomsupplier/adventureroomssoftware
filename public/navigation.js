@@ -1,8 +1,7 @@
 const routes = new Map([
   ['/', ['overview', 'Overview']],
   ['/reception', ['reception', 'Reception']],
-  ['/rounds', ['rounds', 'Round tracking']],
-  ['/rooms', ['rooms', 'Rooms']],
+  ['/leaderboard', ['leaderboard', 'Leaderboard']],
   ['/devices', ['devices', 'Diagnostics']],
 ]);
 
@@ -13,6 +12,7 @@ function showPage(focus = false) {
     if (link.pathname === location.pathname) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
+  window.dispatchEvent(new CustomEvent('pagechange', { detail: { page } }));
   document.title = `${title} · Adventure Rooms`;
   if (focus) {
     const heading = document.querySelector(`[data-page="${page}"] h1`);
