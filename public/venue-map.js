@@ -278,7 +278,7 @@ canvas.addEventListener('pointerup', async e => {
   const g=gesture; gesture=null; if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);
   suppressClick=g.moved; setTimeout(()=>{suppressClick=false;},0);
   if(g.kind==='pan') { if(!g.moved)clearSelection(); }
-  else if(g.moved && Object.keys(g.preview).length) await persist(g.kind,g.id,g.preview);
+  else if(g.moved && Object.keys(g.preview).length) { const saved = await persist(g.kind,g.id,g.preview); if (saved) select(g.kind,saved.id); }
   else if(!g.moved)select(g.kind,g.id);
   draw(true);
 });
@@ -294,7 +294,8 @@ canvas.addEventListener('dragover',e=>{if(canEdit() && [...e.dataTransfer.types]
 canvas.addEventListener('drop',async e=>{
   if(!canEdit())return; e.preventDefault(); const id=e.dataTransfer.getData('application/x-venue-reader'), reader=itemFor('reader',id);if(!reader)return;
   const p=point(e),room=roomAt(p);if(!room)return;
-  await persist('reader',id,{configured:true,name:reader.name || reader.id,role:reader.role || 'entry',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))});
+  const saved = await persist('reader',id,{configured:true,name:reader.name || reader.id,role:reader.role || 'entry',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))});
+  if (saved) select('reader',saved.id);
 });
 export function updateVenueMap(state={}) {
   if(state.rooms)rooms=state.rooms;if(state.readers)readers=state.readers;if(state.screens)screens=state.screens;if(state.sessions)sessions=state.sessions;
