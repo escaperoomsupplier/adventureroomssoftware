@@ -14,7 +14,7 @@ async function showHistory(team) {
   const close = node('button', 'Close', 'secondary'); close.type='button'; close.addEventListener('click', () => { selected=null; historyGeneration++; history.hidden=true; }); heading.append(close); history.append(heading);
   const content = node('div', undefined, 'table-wrap'); content.append(node('p','Loading visits…','empty')); history.append(content);
   try { const response = await fetch(`/api/reception/sessions/${encodeURIComponent(team.id)}/history`, { signal:AbortSignal.timeout(10000), cache:'no-store' }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not load team history.'); if (generation !== historyGeneration) return;
-    table(content,['Room','Entered','Reader'],(data.visits || []).map(visit => [visit.roomName, time(visit.enteredAt), visit.readerName || '—']), 'No room visits yet.');
+    table(content,['Room','Entered','Exited','Reader'],(data.visits || []).map(visit => [visit.roomName, time(visit.enteredAt), time(visit.exitedAt), visit.readerName || '—']), 'No room visits yet.');
   } catch(error) { if(generation === historyGeneration) { content.replaceChildren(node('p', error.message, 'wf-error')); content.setAttribute('role','alert'); } }
 }
 export function updateOverview(state = {}) {

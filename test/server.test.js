@@ -406,7 +406,7 @@ test('room configuration validates controller ownership and publishes committed 
   assert.equal(updated.status, 200);
   const state = await live.next();
   assert.equal(state.rooms[0].name, 'Archive');
-  assert.equal(state.rooms[0].enabled, false);
+  assert.equal(state.rooms[0].enabled, true);
   assert.equal(state.rooms[0].deviceId, null);
   assert.equal((await write('/api/rooms', config)).status, 201);
   await live.next();

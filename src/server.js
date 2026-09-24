@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { mkdir, readFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, relative, isAbsolute } from 'node:path';
+import { realpathSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { DeviceStore } from './store.js';
 import { parseSnapshot } from './protocol.js';
@@ -9,16 +10,20 @@ import { ReceptionStore } from './reception.js';
 import { RoomStore } from './rooms.js';
 import { VenueStore } from './venue.js';
 import { CaptureStore } from './captures.js';
+import { ScreenStore } from './screens.js';
+import { MediaFiles } from './media.js';
+import { PortableConfig, prepareConfigDirectory, readSettings } from './config.js';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
-  ...['/reception', '/leaderboard', '/devices'].map(path => [path, ['index.html', 'text/html; charset=utf-8']]),
+  ...['/reception', '/leaderboard', '/devices', '/screen-settings', '/media', '/automations'].map(path => [path, ['index.html', 'text/html; charset=utf-8']]),
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/reception.js', ['reception.js', 'text/javascript; charset=utf-8']],
-  ...['venue-map', 'reception', 'workflow'].map(name => [`/${name}.css`, [`${name}.css`, 'text/css; charset=utf-8']]),
-  ...['venue-map', 'leaderboard', 'ui'].map(name => [`/${name}.js`, [`${name}.js`, 'text/javascript; charset=utf-8']]),
+  ...['venue-map', 'reception', 'workflow', 'media-settings', 'screen-player'].map(name => [`/${name}.css`, [`${name}.css`, 'text/css; charset=utf-8']]),
+  ...['venue-map', 'leaderboard', 'ui', 'media-settings', 'screen-player', 'screen-picker'].map(name => [`/${name}.js`, [`${name}.js`, 'text/javascript; charset=utf-8']]),
+  ['/screens', ['screen-picker.html', 'text/html; charset=utf-8']],
   ['/navigation.js', ['navigation.js', 'text/javascript; charset=utf-8']],
   ['/overview.js', ['overview.js', 'text/javascript; charset=utf-8']],
 ]);
@@ -52,40 +57,65 @@ async function readJson(req) {
 export async function startServer({
   host = '0.0.0.0', port = 4000, databasePath = resolve('data/adventure-rooms.sqlite'),
   discovery = true, discoveryOptions = {}, logger = console,
+  configDirectory = null, legacyDatabasePath = resolve('data/adventure-rooms.sqlite'), mediaDirectory = null,
 } = {}) {
+  if (configDirectory) databasePath = await prepareConfigDirectory({ directory: configDirectory, legacyDatabasePath });
   if (databasePath !== ':memory:') await mkdir(dirname(databasePath), { recursive: true });
   const store = new DeviceStore(databasePath);
-  const reception = new ReceptionStore(store.db);
-  const rooms = new RoomStore(store.db);
-  const venue = new VenueStore(store.db);
+  let reception, rooms, venue, screens, config;
+  const media = new MediaFiles(mediaDirectory ?? configDirectory ?? dirname(databasePath));
+  const validateConfiguration = () => {
+    screens.validateConfiguration();
+    for (const asset of screens.listMedia()) {
+      const base = realpathSync(resolve(media.directory, 'media'));
+      const file = realpathSync(resolve(media.directory, asset.path));
+      const child = relative(base, file);
+      if (!child || child.startsWith('..') || isAbsolute(child) || !statSync(file).isFile()) throw new Error(`Invalid media file: ${asset.path}`);
+    }
+  };
+  try {
+    reception = new ReceptionStore(store.db);
+    rooms = new RoomStore(store.db);
+    venue = new VenueStore(store.db);
+    screens = new ScreenStore(store.db);
+    if (configDirectory) {
+      config = new PortableConfig(store.db, configDirectory);
+      config.initialize({ validateExtras: validateConfiguration });
+    }
+  } catch (error) { store.close(); throw error; }
+  const changeConfiguration = action => config ? config.change(action, { validateExtras: validateConfiguration }) : action();
   const captures = new CaptureStore();
   let discoveryHandle;
   let discoveryError = null;
   const subscribers = new Set();
+  const screenSubscribers = new Map();
   const health = () => ({ status: 'ok', local: true, transport: 'http-ercc',
     discovery: discovery ? (discoveryError ? 'degraded' : 'active') : 'disabled', discoveryError });
-  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: venue.listReaders(), readers: venue.listReaders(), events: store.listEvents(15), sessions: reception.listSessions(), rooms: rooms.listRooms(), leaderboard: venue.listLeaderboard() })}\n\n`;
+  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: venue.listReaders(), readers: venue.listReaders(), events: store.listEvents(15), sessions: reception.listSessions(), rooms: rooms.listRooms(), leaderboard: venue.listLeaderboard(), screens: screens.listScreens(), rules: screens.listRules(), media: screens.listMedia() })}\n\n`;
   const sendFrame = (res, frame) => {
     // Disconnect slow readers instead of allowing an unbounded outgoing queue.
     if (res.destroyed || res.writableLength > 256 * 1024) {
-      subscribers.delete(res);
+      subscribers.delete(res); screenSubscribers.delete(res);
       res.destroy();
       return;
     }
     res.write(frame);
   };
+  const screenFrame = id => {
+    try { return `data: ${JSON.stringify(screens.screenState(id, reception.listSessions()))}\n\n`; }
+    catch (error) { return `data: ${JSON.stringify({ screen: null, error: error.message })}\n\n`; }
+  };
   const publish = () => {
-    if (!subscribers.size) return;
-    const frame = stateFrame();
-    for (const res of subscribers) sendFrame(res, frame);
+    if (subscribers.size) { const frame = stateFrame(); for (const res of subscribers) sendFrame(res, frame); }
+    for (const [res, id] of screenSubscribers) sendFrame(res, screenFrame(id));
   };
   const heartbeat = setInterval(() => {
-    for (const res of subscribers) sendFrame(res, ': keep-alive\n\n');
+    for (const res of [...subscribers, ...screenSubscribers.keys()]) sendFrame(res, ': keep-alive\n\n');
   }, 15000);
   heartbeat.unref();
-  // Session expiry and reader recovery are maintained even without an open panel.
+  // Session expiry and playback deadlines are maintained without open operator panels.
   const reconciliation = setInterval(() => {
-    try { captures.sweep(venue.listReaders()); if (venue.reconcile()) publish(); }
+    try { captures.sweep(venue.listReaders()); const changed = venue.reconcile(); const playbackChanged = screens.reconcile(); if (changed || playbackChanged) publish(); }
     catch (error) { logger.error('Venue reconciliation failed:', error.message); }
   }, 1000);
   reconciliation.unref();
@@ -96,14 +126,66 @@ export async function startServer({
         res.writeHead(302, { Location: pathname === '/rounds' ? '/leaderboard' : '/' });
         return res.end();
       }
+      const screenLive = /^\/api\/screens\/([A-Za-z0-9_-]{1,128})\/live$/.exec(pathname);
+      if (screenLive && req.method === 'GET') {
+        screens.screenState(screenLive[1], reception.listSessions());
+        if (subscribers.size + screenSubscribers.size >= 64) return json(res, 503, { error: 'Too many live connections' });
+        req.socket.setTimeout(0); req.socket.setNoDelay(true);
+        res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
+        res.flushHeaders(); screenSubscribers.set(res, screenLive[1]);
+        res.on('close', () => screenSubscribers.delete(res)); res.on('error', () => { screenSubscribers.delete(res); res.destroy(); });
+        sendFrame(res, `retry: 1000\n${screenFrame(screenLive[1])}`); return;
+      }
+      if (req.method === 'GET' && pathname === '/api/screens') return json(res, 200, screens.listScreens());
+      if (req.method === 'GET' && pathname === '/api/screen-rules') return json(res, 200, screens.listRules());
+      if (req.method === 'GET' && pathname === '/api/media') return json(res, 200, screens.listMedia());
+      const mediaFile = /^\/media\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
+      if (mediaFile && ['GET', 'HEAD'].includes(req.method)) return await media.serve(req, res, screens.getMedia(mediaFile[1]));
+      if (pathname === '/api/media/upload' && req.method === 'POST') {
+        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin changes are not allowed' });
+        const name = new URL(req.url, 'http://localhost').searchParams.get('name');
+        const asset = await media.receive(req, name);
+        try { changeConfiguration(() => screens.addMedia(asset)); }
+        catch (error) { await media.remove(asset).catch(() => {}); throw error; }
+        json(res, 201, { media: asset }); publish(); return;
+      }
+      const screenRoute = /^\/api\/screens(?:\/([A-Za-z0-9_-]{1,128}))?(\/preview)?$/.exec(pathname);
+      const ruleRoute = /^\/api\/screen-rules(?:\/([A-Za-z0-9_-]{1,128}))?$/.exec(pathname);
+      const mediaRoute = /^\/api\/media\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
+      if ((screenRoute || ruleRoute || mediaRoute) && ['POST', 'PATCH', 'DELETE'].includes(req.method)) {
+        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin changes are not allowed' });
+        let body = {};
+        if (req.method !== 'DELETE') {
+          if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) return json(res, 415, { error: 'Expected application/json' });
+          body = await readJson(req);
+          if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Expected a JSON object' });
+        }
+        let result, status = 200;
+        if (screenRoute?.[2] && screenRoute[1] && req.method === 'POST') result = { playback: screens.preview(screenRoute[1], body.action) };
+        else if (screenRoute && !screenRoute[2]) {
+          if (!screenRoute[1] && req.method === 'POST') { result = { screen: changeConfiguration(() => screens.createScreen(body)) }; status = 201; }
+          else if (screenRoute[1] && req.method === 'PATCH') result = { screen: changeConfiguration(() => screens.updateScreen(screenRoute[1], body)) };
+          else if (screenRoute[1] && req.method === 'DELETE') { changeConfiguration(() => screens.deleteScreen(screenRoute[1])); result = { status: 'removed' }; }
+        } else if (ruleRoute) {
+          if (!ruleRoute[1] && req.method === 'POST') { result = { rule: changeConfiguration(() => screens.createRule(body)) }; status = 201; }
+          else if (ruleRoute[1] && req.method === 'PATCH') result = { rule: changeConfiguration(() => screens.updateRule(ruleRoute[1], body)) };
+          else if (ruleRoute[1] && req.method === 'DELETE') { changeConfiguration(() => screens.deleteRule(ruleRoute[1])); result = { status: 'removed' }; }
+        } else if (mediaRoute && req.method === 'DELETE') {
+          const asset = screens.getMedia(mediaRoute[1]);
+          changeConfiguration(() => screens.deleteMedia(asset.id));
+          await media.remove(asset).catch(error => logger.error('Media cleanup:', error.message)); result = { status: 'removed' };
+        }
+        if (!result) return json(res, 404, { error: 'Not found' });
+        json(res, status, result); publish(); return;
+      }
       if (pathname === '/api/readers' && req.method === 'GET') return json(res, 200, venue.listReaders());
       if (pathname === '/api/leaderboard' && req.method === 'GET') return json(res, 200, venue.listLeaderboard());
-      const historyRoute = /^\/api\/reception\/sessions\/([A-Za-z0-9-]{1,80})\/history$/.exec(pathname);
+      const historyRoute = /^\/api\/reception\/sessions\/([A-Za-z0-9_-]{1,128})\/history$/.exec(pathname);
       if (historyRoute && req.method === 'GET') return json(res, 200, { visits: venue.getHistory(historyRoute[1]) });
-      const captureRoute = /^\/api\/captures\/([A-Za-z0-9-]{1,80})$/.exec(pathname);
+      const captureRoute = /^\/api\/captures\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
       if (captureRoute && req.method === 'GET') return json(res, 200, { capture: captures.get(captureRoute[1]) });
       const readerRoute = /^\/api\/readers\/([A-Za-z0-9_-]{14})(\/capture)?$/.exec(pathname);
-      const resultRoute = /^\/api\/leaderboard\/([A-Za-z0-9-]{1,80})$/.exec(pathname);
+      const resultRoute = /^\/api\/leaderboard\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
       if ((readerRoute && ['PATCH', 'POST'].includes(req.method)) || (captureRoute && req.method === 'DELETE') || (resultRoute && req.method === 'DELETE')) {
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin changes are not allowed' });
         let body = {};
@@ -113,7 +195,7 @@ export async function startServer({
           if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Expected a JSON object' });
         }
         if (readerRoute && !readerRoute[2] && req.method === 'PATCH') {
-          const reader = venue.updateReader(readerRoute[1], body);
+          const reader = changeConfiguration(() => venue.updateReader(readerRoute[1], body));
           captures.sweep(venue.listReaders());
           json(res, 200, { reader }); publish(); return;
         }
@@ -139,10 +221,10 @@ export async function startServer({
         }
         const body = await readJson(req);
         if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Expected a JSON object' });
-        const route = /^\/api\/rooms\/([A-Za-z0-9-]{1,80})$/.exec(pathname);
+        const route = /^\/api\/rooms\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
         let room;
-        if (pathname === '/api/rooms' && req.method === 'POST') room = rooms.createRoom(body);
-        else if (route && req.method === 'PATCH') room = rooms.updateRoom(route[1], body);
+        if (pathname === '/api/rooms' && req.method === 'POST') room = changeConfiguration(() => rooms.createRoom(body));
+        else if (route && req.method === 'PATCH') room = changeConfiguration(() => rooms.updateRoom(route[1], body));
         else return json(res, 404, { error: 'Not found' });
         venue.reconcile();
         json(res, req.method === 'POST' ? 201 : 200, { room });
@@ -169,7 +251,7 @@ export async function startServer({
         }
         let session;
         let status = 200;
-        const route = /^\/api\/reception\/sessions\/([A-Za-z0-9-]{1,80})\/(cards|start|end)(?:\/([A-Za-z0-9]{1,32}))?$/.exec(pathname);
+        const route = /^\/api\/reception\/sessions\/([A-Za-z0-9_-]{1,128})\/(cards|start|end)(?:\/([A-Za-z0-9]{1,32}))?$/.exec(pathname);
         if (pathname === '/api/reception/sessions' && req.method === 'POST') {
           session = reception.createSession(body);
           status = 201;
@@ -211,6 +293,7 @@ export async function startServer({
         const recorded = store.recordSnapshot(snapshot, req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? 'unknown', data => {
           capture = captureBaselineReady ? captures.match(data) : null;
           venue.applySnapshot(capture ? { ...data, event: null } : data);
+          screens.syncEvents(venue.listDomainEvents(screens.getEventCursor()));
         });
         if (capture) captures.complete(capture, recorded.event.uid);
         // ACK only after SQLite commit. UUPC checks for literal "200 OK".
@@ -219,7 +302,7 @@ export async function startServer({
         return;
       }
       if (req.method === 'GET' && pathname === '/api/live') {
-        if (subscribers.size >= 64) return json(res, 503, { error: 'Too many live connections' });
+        if (subscribers.size + screenSubscribers.size >= 64) return json(res, 503, { error: 'Too many live connections' });
         // A complete snapshot on every connection also repairs gaps after reconnect.
         const initial = stateFrame();
         req.socket.setTimeout(0);
@@ -239,12 +322,13 @@ export async function startServer({
       }
       if (req.method === 'GET' && pathname === '/api/devices') return json(res, 200, venue.listReaders());
       if (req.method === 'GET' && pathname === '/api/events') return json(res, 200, store.listEvents(15));
-      if (req.method === 'GET' && assets.has(pathname)) {
-        const [file, type] = assets.get(pathname);
+      const playerPage = /^\/screens\/[A-Za-z0-9_-]{1,128}$/.test(pathname);
+      if (req.method === 'GET' && (assets.has(pathname) || playerPage)) {
+        const [file, type] = playerPage ? ['screen.html', 'text/html; charset=utf-8'] : assets.get(pathname);
         const content = await readFile(resolve(publicDir, file));
         res.writeHead(200, { 'Content-Type': type, 'Content-Length': content.length,
           'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
-          'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'" });
+          'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" });
         return res.end(content);
       }
       json(res, 404, { error: 'Not found' });
@@ -254,7 +338,7 @@ export async function startServer({
       else res.destroy();
     }
   });
-  server.requestTimeout = 5000;
+  server.requestTimeout = 120000;
   server.headersTimeout = 5000;
   server.timeout = 5000;
   try {
@@ -264,6 +348,7 @@ export async function startServer({
     });
     // Establish runtime baselines only after this listener binds successfully.
     venue.reconcile({ restart: true });
+    screens.syncEvents(venue.listDomainEvents(screens.getEventCursor())); screens.reconcile();
     if (discovery) {
       discoveryHandle = await startDiscovery({ ...discoveryOptions,
         onDevice: device => {
@@ -276,36 +361,38 @@ export async function startServer({
   } catch (error) {
     clearInterval(heartbeat);
     clearInterval(reconciliation);
-    for (const res of subscribers) res.destroy();
-    subscribers.clear();
+    for (const res of [...subscribers, ...screenSubscribers.keys()]) res.destroy();
+    subscribers.clear(); screenSubscribers.clear();
     if (server.listening) await new Promise(done => server.close(done));
     store.close();
     throw error;
   }
   let closed = false;
-  return { server, store, reception, rooms, venue, captures, address: server.address(), async close() {
+  return { server, store, reception, rooms, venue, captures, screens, config, media, address: server.address(), async close() {
     if (closed) return;
     closed = true;
     await discoveryHandle?.close();
     clearInterval(heartbeat);
     clearInterval(reconciliation);
-    for (const res of subscribers) res.end();
-    subscribers.clear();
+    for (const res of [...subscribers, ...screenSubscribers.keys()]) res.end();
+    subscribers.clear(); screenSubscribers.clear();
     await new Promise(done => server.close(done));
     store.close();
   } };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const port = Number(process.env.PORT ?? 4000);
+  const configDirectory = resolve(process.env.CONFIG_DIR ?? 'config');
+  const settings = readSettings(configDirectory);
+  const port = Number(process.env.PORT ?? settings.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be 1..65535');
   const app = await startServer({
-    host: process.env.HOST ?? '0.0.0.0', port,
-    databasePath: resolve(process.env.DATA_DIR ?? 'data', 'adventure-rooms.sqlite'),
-    discovery: process.env.DISCOVERY !== '0',
+    host: process.env.HOST ?? settings.host, port, configDirectory,
+    legacyDatabasePath: resolve(process.env.DATA_DIR ?? 'data', 'adventure-rooms.sqlite'),
+    discovery: process.env.DISCOVERY === undefined ? settings.discovery : process.env.DISCOVERY !== '0',
     discoveryOptions: {
-      bindAddress: process.env.DISCOVERY_BIND ?? '0.0.0.0',
-      targets: (process.env.DISCOVERY_TARGETS ?? '255.255.255.255').split(',').map(x => x.trim()),
+      bindAddress: process.env.DISCOVERY_BIND ?? settings.discoveryBind,
+      targets: process.env.DISCOVERY_TARGETS ? process.env.DISCOVERY_TARGETS.split(',').map(x => x.trim()) : settings.discoveryTargets,
     },
   });
   console.log(`Adventure Rooms: http://localhost:${app.address.port} (local HTTP, no cloud)`);

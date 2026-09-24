@@ -10,6 +10,7 @@ Configuration and team actions send no commands to physical hardware.
 - **Overview** (`/`): interactive venue map, teams and selectable visit histories.
 - **Reception** (`/reception`): prepare teams, assign wristbands, start and finish games.
 - **Leaderboard** (`/leaderboard`): completed games ordered by total elapsed time.
+- **Screen settings** (`/screen-settings`): defaults, media and screen automation. Displays open `/screens` to choose their player.
 - **Diagnostics** (`/devices`): readers, selectable details and the latest 15 RFID events.
 
 Pages support direct links and browser Back/Forward. Navigation preserves forms
@@ -19,23 +20,27 @@ before relying on it. Reconnection refreshes the current view.
 
 ## Set up the venue
 
-1. On Overview, unlock the map and choose **Add room**. Enter its name and save.
-2. Drag the room to position it and use its corner handle to resize. Empty space
-   pans the map; the zoom controls change scale. Numeric fields below the map
-   provide a keyboard alternative to dragging and resizing.
-3. Select a discovered reader from the list on the right. Enter a friendly name,
-   choose its room and role, and press **Add reader** to configure it explicitly.
-4. Place configured readers by dragging them from the list onto a room, moving
-   their markers within the room, or editing their room and coordinates below.
-5. Lock the map when finished. It automatically fits all rooms, and selection
-   still works for inspecting rooms and readers.
+1. Unlock the map and choose **Add room**. Enter its name and save.
+2. Drag its rectangle to move it. Drag any edge to resize. Drag empty space to pan,
+   use the mouse wheel to zoom, or press **Fit view** to see the layout.
+3. Drag a discovered reader from the right-hand list onto a room. This configures
+   and places it. Select its block to give it a friendly name and choose its role.
+4. Move reader blocks within or between rooms. The room inspector lists its readers
+   and screens. Positions are saved locally; multiple readers can share a room.
+5. Use **Add screen** for a display block. Assign its room and open **Screen settings**
+   from its inspector to configure background, music and team timers.
+6. Lock the map when finished. It fits the venue automatically. Select items to
+   inspect them; click empty space to clear selection. Clicking a locked edit field
+   highlights the lock control.
 
-A room can have several readers; the physical connection remains one RFID reader
-per UUPC. Green rooms have recent contact from every configured assigned reader;
-red rooms have at least one reader unseen for more than 25 seconds. Grey means
-no configured readers or a disabled room. Contact is not proof that a room is empty
-or that its puzzle is ready. Disabling a room prevents assigned reader roles from
-processing team visits; it does not disable hardware.
+Rooms can occupy negative coordinates, and new rooms begin near `(1000,1000)`.
+Geometry fields are hidden. Keyboard users can Tab to a block and use arrow keys
+to move it; Shift and arrows resize a room. Keyboard focus remains visible.
+
+Green rooms have recent contact from every configured assigned reader; red rooms
+have at least one reader unseen for more than 25 seconds. Grey means no configured
+readers or a disabled room. Team markers show their last registered location.
+Neither colour nor markers prove physical occupancy or puzzle readiness.
 
 ## Prepare a team and wristbands
 
@@ -56,11 +61,13 @@ cards but does not count as successful completion. Deadlines persist after resta
 
 ## Follow a game
 
-An **entry** reader records an active team's arrival in its assigned room. A
-**start** reader starts a pending team and can also record its first room. A
-**finish** reader finishes an active game. Start and finish stations can be left
+An **Entry Room** reader records an active team's arrival in its assigned room. A
+**Start time** reader starts a pending team and can also record its first room. A
+**Stop time** reader finishes an active game. Start and finish stations can be left
 unassigned to a room. All assigned rooms must be enabled for their readers' roles
 to process the scan.
+
+An **Exit Room** reader records departure from its room without stopping the team clock.
 
 Overview shows the team's last recorded room. Select the team to inspect its
 visit history. Repeated snapshots do not create extra visits; further taps in the
@@ -96,14 +103,14 @@ do not mix with venue data. For example, in a new PowerShell terminal:
 $env:DISCOVERY='0'
 $env:HOST='127.0.0.1'
 $env:PORT='14000'
-$env:DATA_DIR='data-demo'
+$env:CONFIG_DIR='config-demo'
 npm start
 ```
 
 On macOS:
 
 ```sh
-DISCOVERY=0 HOST=127.0.0.1 PORT=14000 DATA_DIR=data-demo npm start
+DISCOVERY=0 HOST=127.0.0.1 PORT=14000 CONFIG_DIR=config-demo npm start
 ```
 
 With the demo server above running, use a second terminal:
@@ -134,7 +141,7 @@ Stop the demo server, then start the receiver in PowerShell with:
 $env:DISCOVERY='1'
 $env:HOST='0.0.0.0'
 $env:PORT='4000'
-$env:DATA_DIR='data'
+$env:CONFIG_DIR='config'
 npm start
 ```
 
@@ -152,3 +159,17 @@ are filtered, but restarts, lost callbacks or rapid transitions may leave gaps i
 history. UDP heartbeats do not prove that every HTTP event arrived. The system
 records received visits and elapsed game time; it does not verify physical access
 or operate puzzle starts, resets or locks.
+
+## Display content and backups
+
+Use `/screen-settings` for screen defaults, media uploads and automation. On the
+physical display, open `/screens`, choose the screen and press **Start screen** to
+allow audio and request fullscreen. A player can also be opened at `/screens/:id`.
+See [Screens and media](screens.md) for supported formats, timed actions and setup.
+
+The default `config` directory holds authoritative version-1 JSON configuration,
+local media, `state/runtime.sqlite` and backups. `CONFIG_DIR` selects another
+configuration directory. Stop the application before copying the complete directory
+to another machine. Invalid configuration stops startup with an error while
+preserving data; legacy data is migrated automatically. Environment variables for
+`PORT`, `HOST` and `DISCOVERY` override saved settings for the current run.

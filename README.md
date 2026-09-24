@@ -13,10 +13,14 @@ Node.js 24.11 or newer is required. There are no packages to install.
 npm start
 ```
 
-Panel: http://localhost:4000. Database: `data/adventure-rooms.sqlite` (ignored by Git).
+Panel: http://localhost:4000. The default local configuration directory is `config`
+under the repository; set `CONFIG_DIR` to use another directory. JSON files are
+the authoritative venue configuration, while sessions and history are stored in
+`config/state/runtime.sqlite`. These local files are excluded from Git.
+
 The server runs independently of the browser window, but its process must remain
-running. Stop it with Ctrl+C. Back up the database and any required WAL files after
-a clean shutdown; do not copy only the database file while it is active.
+running. Stop it with Ctrl+C. Back up the complete configuration directory after
+a clean shutdown, including media, runtime state and backups.
 
 The panel receives immediate server-sent events (SSE over HTTP). On connection and
 reconnection, the server sends a full snapshot to restore the current view. There
@@ -63,7 +67,7 @@ above explicitly restore the settings needed for real hardware.
 - The receiver acknowledges with `200 OK` only after committing the SQLite transaction.
 - The panel provides reception management and diagnostics without authentication and is intended for a trusted LAN.
 
-Configuration variables: `HOST`, `PORT`, `DATA_DIR`, `DISCOVERY=0`, `DISCOVERY_BIND`
+Configuration variables: `HOST`, `PORT`, `CONFIG_DIR`, `DISCOVERY=0`, `DISCOVERY_BIND`
 (interface IPv4 address), and `DISCOVERY_TARGETS` (comma-separated IPv4 addresses:
 subnet broadcast addresses or controller IPs). With multiple network interfaces,
 select the interface and broadcast address for the room network. Keep HTTP 4000
@@ -121,35 +125,40 @@ finish. None of these actions starts a physical puzzle or opens a door.
 
 ## Interactive venue map
 
-The top of **Overview** contains the venue map. It starts locked and automatically
-fits all rooms. Selection works while locked: select a rectangle, a reader marker,
-or a reader in the right-hand list to open its details below the map.
+The map starts locked and fits all rooms and screens. Select a room, reader or
+screen to inspect it below the map. Click empty map space to clear the selection.
+Attempting to edit a locked field highlights the lock in the map header.
 
-Unlock editing to add rooms, drag rectangles, resize them using their corner
-handles, move reader markers, pan empty map space, or zoom. The details form also
-provides numeric position and size fields for keyboard operation. Locking returns
-to the automatic fit. Geometry and names are saved to the local server; unsaved
-form values are preserved during live updates.
+Unlock to drag rooms, resize from any of their four edges, pan empty space or zoom
+with the mouse wheel. **Fit view** restores a view of the layout. Coordinates can
+be negative; new rooms begin near `(1000,1000)`. Numeric geometry and enabled fields
+are not part of the map inspector. Keyboard users can focus a block and use arrow
+keys to move it, or Shift and arrows to resize a room.
 
-Discovered readers appear in the side list. Select one, give it a friendly name,
-choose a room and role, then use **Add reader**. A configured reader can be dragged
-from the list into a room or assigned through the details form. Multiple readers
-may belong to a room; each still represents one physical reader on its UUPC.
+Drag a discovered reader from the right-hand list onto a room to configure and
+place it. Reader blocks can move within a room or between rooms. Give each reader
+a friendly name and select its role in the inspector. Room details list its readers
+and screens. Multiple readers can belong to a room, each backed by its own UUPC.
 
-Room colour describes contact only: green means all configured readers assigned
-to it were seen within 25 seconds, red means at least one is stale, and grey means
-no configured readers or a disabled room. These colours do not indicate occupancy,
-puzzle readiness or door state. Configuration sends no hardware commands.
+Room names appear inside their rectangles. Green indicates recent contact from all
+configured assigned readers, red indicates a stale reader, and grey indicates no
+configured readers. Active team markers show the last registered
+room, not verified physical occupancy. Unsaved inspector fields survive live updates.
+
+Use **Add screen** to create a display block. Select it to assign a room, change its
+name or open its advanced settings. See [Screens and media](docs/screens.md) for
+player setup, media uploads and automation.
 
 ## Reader roles and team history
 
-- **Entry** records the active team's arrival in the assigned enabled room.
-- **Start** starts a pending team's session and records its room arrival when assigned.
-- **Finish** finishes an active team's game and creates its elapsed-time result.
+- **Entry Room** records the active team's arrival in the assigned room.
+- **Start time** starts a pending team's session and records its room arrival when assigned.
+- **Stop time** finishes an active team's game and creates its elapsed-time result.
+
+- **Exit Room** records departure from the assigned room without stopping the game clock.
 
 Readers may be left unassigned to a room, for example a start or finish station.
-A disabled assigned room prevents that reader from processing team visits. The
-team's displayed room is its last recorded arrival, not a physical occupancy check.
+The team's displayed room is its last recorded arrival, not a physical occupancy check.
 Repeated snapshots and additional scans within the same room do not add duplicate
 visits. Selecting a team on Overview displays its visit history.
 
@@ -176,3 +185,29 @@ firmware never delivered. UDP contact does not guarantee uninterrupted HTTP
 callbacks; unobserved resets, outages and reordered snapshots may make recorded
 visits incomplete. Hardware control requires separate verification of physical
 start, reset and result behaviour.
+
+## Portable configuration
+
+The default `config` directory contains `settings.json`, `rooms.json`, `readers.json`,
+`screens.json`, `rules.json` and `media.json`, each with `schemaVersion: 1`. These
+JSON files are authoritative. Media lives in `media/audio`, `media/images` and
+`media/videos`; runtime SQLite data lives in `state/runtime.sqlite`; saved backups
+live in `backups`. Set `CONFIG_DIR` to move this entire local directory elsewhere.
+
+Stop the server before copying the whole directory to another computer. Legacy
+local data is migrated automatically. Invalid configuration stops startup with an
+error and preserves the data. `PORT`, `HOST` and `DISCOVERY` environment variables
+override values in settings for the current run.
+
+## Screens and automation
+
+Configure displays at `/screen-settings`; open `/screens` to choose a display or
+`/screens/:id` to open its player. Press **Start screen** on the display for the
+initial audio/fullscreen gesture. Defaults include a colour/image/video background,
+optional music and team timers. Timed actions require a duration of 1–3600 seconds
+and can replace the current action or queue behind it.
+
+Media uploads are local, limited to 512 MB per file, and support PNG, JPEG, GIF,
+WebP, MP4, WebM, MP3, WAV and OGG. See [Screens and media](docs/screens.md) for setup
+and backup instructions. This remains a Node application; no desktop installer is
+included.

@@ -27,7 +27,7 @@ test('rooms support defaults, assignments, unassignment and controller reuse', t
   const assigned = rooms.updateRoom(first.id, { name: first.name, deviceId, enabled: true });
   assert.equal(assigned.deviceId, deviceId);
   const second = rooms.createRoom({ name: 'Second room', deviceId: otherId, enabled: false });
-  assert.equal(second.enabled, false);
+  assert.equal(second.enabled, true);
   assert.deepEqual(rooms.listRooms().map(room => room.id), [first.id, second.id]);
   rooms.updateRoom(first.id, { name: 'Renamed', deviceId: null, enabled: false });
   assert.equal(rooms.updateRoom(second.id, { name: second.name, deviceId, enabled: true }).deviceId, deviceId);
@@ -43,7 +43,7 @@ test('assignment conflicts roll back complete updates and disabled rooms keep ow
   assert.throws(() => rooms.updateRoom(second.id, { name: 'Changed', deviceId, enabled: false }), status(409));
   assert.deepEqual(rooms.getRoom(second.id), second);
   assert.equal(rooms.listRooms().length, 2);
-  assert.equal(rooms.updateRoom(second.id, { name: second.name, deviceId: otherId, enabled: false }).enabled, false);
+  assert.equal(rooms.updateRoom(second.id, { name: second.name, deviceId: otherId, enabled: false }).enabled, true);
 });
 
 test('invalid names, IDs, booleans and unknown controllers leave persisted data unchanged', t => {
@@ -72,7 +72,8 @@ test('partial geometry updates preserve other fields and reject invalid coordina
   assert.equal(room.width, 240);
   assert.equal(rooms.updateRoom(room.id, { x: 42, width: 500 }).name, 'Map room');
   assert.equal(rooms.getRoom(room.id).x, 42);
-  for (const input of [{ x: -1 }, { y: Infinity }, { height: 79 }, { width: 2001 }, { x: 1.5 }]) {
+  assert.equal(rooms.updateRoom(room.id, { x: -1 }).x, -1);
+  for (const input of [{ x: -10001 }, { y: Infinity }, { height: 79 }, { width: 2001 }, { x: 1.5 }]) {
     assert.throws(() => rooms.updateRoom(room.id, input), status(400));
   }
 });

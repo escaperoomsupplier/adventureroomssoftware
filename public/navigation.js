@@ -3,6 +3,9 @@ const routes = new Map([
   ['/reception', ['reception', 'Reception']],
   ['/leaderboard', ['leaderboard', 'Leaderboard']],
   ['/devices', ['devices', 'Diagnostics']],
+  ['/screen-settings', ['screen-settings', 'Screens']],
+  ['/media', ['media', 'Media']],
+  ['/automations', ['automations', 'Automations']],
 ]);
 
 function showPage(focus = false) {

@@ -73,14 +73,13 @@ test('multiple teams and readers share rooms, history snapshots survive renaming
   assert.equal(reception.getSession(team.id).status, 'finished');
 });
 
-test('unconfigured, disabled, baseline and duplicate events cannot trigger lifecycle changes', t => {
+test('unconfigured readers, baseline and duplicate events cannot trigger lifecycle changes', t => {
   const { devices, venue, reception, rooms, room, team, observe, tap, now } = setup(t);
   observe(ids[0]); tap(ids[0]);
   assert.equal(reception.getSession(team.id).status, 'pending');
   venue.updateReader(ids[0], { configured: true, roomId: room.id, role: 'start' });
-  rooms.updateRoom(room.id, { enabled: false }); tap(ids[0]);
-  assert.equal(reception.getSession(team.id).status, 'pending');
-  rooms.updateRoom(room.id, { enabled: true });
+  rooms.updateRoom(room.id, { enabled: false });
+  assert.equal(rooms.getRoom(room.id).enabled, true);
   venue.reconcile({ restart: true }); tap(ids[0]);
   assert.equal(reception.getSession(team.id).status, 'pending');
   const data = { device: { id: ids[0] }, previous: { lastSeenAt: new Date(now()).toISOString() },
@@ -194,4 +193,46 @@ test('legacy controller assignments migrate once and settings/results survive re
     assert.equal(reception.getSession(team.id).status, 'finished');
     assert.deepEqual(venue.listLeaderboard(), []);
   } finally { devices?.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('exit readers clear only their matching room and emit transactional domain events once', t => {
+  const { venue, reception, rooms, room, team, observe, tap } = setup(t);
+  const other = rooms.createRoom({ name: 'Other' });
+  venue.updateReader(ids[0], { configured: true, roomId: room.id, role: 'entry' });
+  venue.updateReader(ids[1], { configured: true, roomId: other.id, role: 'exit' });
+  venue.updateReader(ids[2], { configured: true, roomId: room.id, role: 'exit' });
+  for (const id of ids) observe(id);
+  reception.startSession(team.id);
+  tap(ids[0]); tap(ids[1]);
+  assert.equal(reception.getSession(team.id).currentRoomId, room.id);
+  tap(ids[2]); tap(ids[2]);
+  assert.equal(reception.getSession(team.id).currentRoomId, null);
+  assert.equal(reception.getSession(team.id).status, 'active');
+  const history = venue.getHistory(team.id);
+  assert.ok(history[0].exitedAt);
+  assert.equal(history[0].exitReason, 'reader_exit');
+  const events = venue.listDomainEvents();
+  assert.deepEqual(events.map(e => e.type), ['room.entered', 'room.exited']);
+  assert.equal(venue.listDomainEvents(events[0].sequence).length, 1);
+  tap(ids[0]);
+  venue.updateReader(ids[1], { role: 'entry' }); tap(ids[1]);
+  assert.equal(venue.getHistory(team.id)[1].exitReason, 'next_room');
+  assert.equal(venue.listDomainEvents().filter(e => e.type === 'room.exited').length, 1);
+});
+
+test('domain events and visit exit changes roll back with the firmware transaction', t => {
+  const { devices, venue, reception, room, team } = setup(t);
+  venue.updateReader(ids[0], { configured: true, roomId: room.id, role: 'entry' });
+  reception.startSession(team.id);
+  const post = (uid, placed, fail = false) => devices.recordSnapshot({ id: ids[0], machineState: 0, rfid: { uid, placed } }, '127.0.0.1', data => {
+    venue.applySnapshot(data); if (fail) throw new Error('Rollback event');
+  });
+  post('00000000', false); post('AABBCCDD', true);
+  venue.updateReader(ids[0], { role: 'exit' }); post('AABBCCDD', false);
+  assert.throws(() => post('AABBCCDD', true, true), /Rollback event/);
+  assert.equal(venue.listDomainEvents().length, 1);
+  assert.equal(venue.getHistory(team.id)[0].exitedAt, null);
+  assert.equal(reception.getSession(team.id).currentRoomId, room.id);
+  post('AABBCCDD', true);
+  assert.equal(venue.listDomainEvents().length, 2);
 });
