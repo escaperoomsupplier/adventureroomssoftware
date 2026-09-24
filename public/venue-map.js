@@ -7,8 +7,20 @@ const snap = value => Math.round(value / 20) * 20;
 const roles = { start: 'Start time', finish: 'Stop time', entry: 'Entry Room', exit: 'Exit Room' };
 let rooms = [], readers = [], screens = [], sessions = [], connected = false, locked = true, pending = false;
 let selected = null, gesture = null, signature = '', listSignature = '', flashTimer, suppressClick = false;
+let readerDragging = false;
 let view = { x: 500, y: 700, w: 1000, h: 600 };
 const canEdit = () => !locked && connected && !pending;
+const online = (type,item) => connected && (type === 'screen' ? item.online === true : Number.isFinite(Date.parse(item.lastSeenAt)) && Date.now() - Date.parse(item.lastSeenAt) <= 25000);
+function itemIcon(type) {
+  const icon=svgNode('svg',{viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':1.7,'aria-hidden':'true',class:'vm-item-icon'});
+  if(type==='screen')icon.append(svgNode('rect',{x:3,y:4,width:18,height:13,rx:2}),svgNode('path',{d:'M8 21h8M12 17v4'}));
+  else icon.append(svgNode('rect',{x:3,y:5,width:12,height:14,rx:2}),svgNode('path',{d:'M6 9h5M6 13h3M18 8a6 6 0 0 1 0 8M21 5a10 10 0 0 1 0 14'}));
+  return icon;
+}
+function decorateButton(b,type,item) {
+  const label=node('span',item.name || item.id,'vm-item-label'),dot=node('span',undefined,`vm-contact-dot ${online(type,item)?'vm-contact-online':'vm-contact-offline'}`);
+  dot.setAttribute('aria-hidden','true');b.replaceChildren(itemIcon(type),label,dot);b.classList.add('vm-item-button');b.setAttribute('aria-label',`${type==='screen'?'Screen':'Reader'} ${item.name || item.id}, ${online(type,item)?'connected':'offline'}`);return b;
+}
 const collection = type => type === 'room' ? rooms : type === 'reader' ? readers : screens;
 const itemFor = (type, id) => collection(type).find(item => item.id === id);
 const button = (text, action) => { const b = node('button', text); b.type = 'button'; b.addEventListener('click', action); return b; };
@@ -111,7 +123,7 @@ function accessible(g, type, id, label) {
 }
 function draw(force = false) {
   if (gesture && !force) return;
-  const next = JSON.stringify([rooms, readers.map(r => [r.id,r.name,r.configured,r.roomId,r.x,r.y,r.role]), screens.map(s => [s.id,s.name,s.roomId,s.x,s.y]), sessions.map(s => [s.id,s.teamName,s.status,s.currentRoomId]), rooms.map(contact), selected, locked, view]);
+  const next = JSON.stringify([rooms, readers.map(r => [r.id,r.name,r.configured,r.roomId,r.x,r.y,r.role,online('reader',r)]), screens.map(s => [s.id,s.name,s.roomId,s.x,s.y,online('screen',s)]), sessions.map(s => [s.id,s.teamName,s.status,s.currentRoomId]), rooms.map(contact), selected, locked, view]);
   if (!force && signature === next) return; signature = next;
   const focusKey = canvas.contains(document.activeElement) ? document.activeElement.dataset.key : null;
   canvas.replaceChildren(); canvas.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
@@ -146,9 +158,11 @@ function draw(force = false) {
     const room = displayRooms.find(r => r.id === item.roomId); if (item.roomId && !room) continue;
     const x = (room?.x || 0) + (room ? clamp(item.x,0,Math.max(0,room.width-116)) : item.x), y = (room?.y || 0) + (room ? clamp(item.y,0,Math.max(0,room.height-42)) : item.y);
     const g = svgNode('g', { class: `vm-block vm-${type}${selected?.type === type && selected.id === item.id ? ' vm-selected' : ''}` });
-    accessible(g, type, item.id, `${type === 'screen' ? 'Screen' : 'Reader'} ${item.name || item.id}`);
+    accessible(g, type, item.id, `${type === 'screen' ? 'Screen' : 'Reader'} ${item.name || item.id}, ${online(type,item)?'connected':'offline'}`);
     g.append(svgNode('rect', { x, y, width: 116, height: 42, rx: 6 }));
-    const text = svgNode('text', { x: x + 9, y: y + 17 }); text.textContent = (item.name || item.id).slice(0, 16); g.append(text);
+    const icon=itemIcon(type);icon.setAttribute('x',x+7);icon.setAttribute('y',y+7);icon.setAttribute('width',17);icon.setAttribute('height',17);g.append(icon);
+    const dot=svgNode('circle',{cx:x+106,cy:y+11,r:3.5,class:`vm-contact-dot ${online(type,item)?'vm-contact-online':'vm-contact-offline'}`});g.append(dot);
+    const text = svgNode('text', { x: x + 28, y: y + 17 }); text.textContent = (item.name || item.id).slice(0, 11); g.append(text);
     const label = svgNode('text', { x: x + 9, y: y + 32, class: 'vm-block-sub' }); label.textContent = type === 'screen' ? 'Screen' : roles[item.role] || 'Reader'; g.append(label);
     const title = svgNode('title'); title.textContent = item.name || item.id; g.append(title);
     g.addEventListener('pointerdown', e => begin(e, type, original)); canvas.append(g);
@@ -156,11 +170,12 @@ function draw(force = false) {
   if (focusKey) [...canvas.querySelectorAll('[data-key]')].find(e => e.dataset.key === focusKey)?.focus({ preventScroll: true });
 }
 function listReaders() {
-  const next = JSON.stringify(readers.map(r => [r.id,r.name,r.configured,r.roomId])); if (next === listSignature) return; listSignature = next;
+  if(readerDragging)return;
+  const next = JSON.stringify(readers.map(r => [r.id,r.name,r.configured,r.roomId,online('reader',r)])); if (next === listSignature) return; listSignature = next;
   const focused = document.activeElement?.dataset.readerId; readerList.replaceChildren();
   for (const reader of readers) {
-    const b = button(reader.name || reader.id, () => select('reader', reader.id)); b.dataset.readerId = reader.id; b.draggable = canEdit();
-    b.addEventListener('dragstart', e => { if (!canEdit()) { e.preventDefault(); if (locked) flashLock(); return; } e.dataTransfer.setData('application/x-venue-reader', reader.id); e.dataTransfer.effectAllowed = 'move'; }); readerList.append(b);
+    const b = decorateButton(button('', () => select('reader', reader.id)), 'reader', reader); b.dataset.readerId = reader.id; b.draggable = canEdit();
+    b.addEventListener('dragstart', e => { if (!canEdit()) { e.preventDefault(); if (locked) flashLock(); return; } readerDragging=true; e.dataTransfer.setData('application/x-venue-reader', reader.id); e.dataTransfer.effectAllowed = 'move'; }); b.addEventListener('dragend',()=>{readerDragging=false;listReaders();}); readerList.append(b);
   }
   if (!readers.length) readerList.append(node('p', 'No readers discovered.', 'vm-help'));
   if (focused) [...readerList.querySelectorAll('button')].find(b => b.dataset.readerId === focused)?.focus({ preventScroll: true });
@@ -174,10 +189,19 @@ function field(form, title, value, choices) {
 function refreshAssigned() {
   const target = inspector.querySelector('[data-assigned-room]'); if (!target) return;
   const items = ['reader','screen'].flatMap(type => collection(type).filter(item => item.roomId === target.dataset.assignedRoom && (type !== 'reader' || item.configured)).map(item => ({type,item})));
-  const next = JSON.stringify(items.map(({type,item}) => [type,item.id,item.name]));
+  const next = JSON.stringify(items.map(({type,item}) => [type,item.id,item.name,online(type,item)]));
   if (target.dataset.signature === next) return; target.dataset.signature = next; target.replaceChildren();
-  for (const {type,item} of items) target.append(button(`${type === 'reader' ? 'Reader' : 'Screen'}: ${item.name || item.id}`, () => select(type,item.id)));
-  if (!items.length) target.append(node('p','No readers or screens assigned.','vm-help'));
+  for (const type of ['reader','screen']) {
+    const group = node('section', undefined, 'vm-assigned-group');
+    group.append(node('h4', type === 'reader' ? 'Readers' : 'Screens'));
+    const buttons = node('div', undefined, 'vm-assigned-buttons');
+    for (const {item} of items.filter(entry => entry.type === type)) {
+      buttons.append(decorateButton(button('', () => select(type,item.id)), type, item));
+    }
+    if (!buttons.children.length) buttons.append(node('p', type === 'reader' ? 'No readers assigned.' : 'No screens assigned.', 'vm-help'));
+    group.append(buttons);
+    target.append(group);
+  }
 }
 function select(type, id) {
   selected = { type, id }; inspector.replaceChildren();
@@ -217,8 +241,7 @@ function select(type, id) {
   }); inspector.append(form);
   if (type === 'room' && id) {
     const items = node('div', undefined, 'vm-assigned'); items.dataset.assignedRoom = id;
-    for (const kind of ['reader','screen']) for (const item of collection(kind).filter(i => i.roomId === id && (kind !== 'reader' || i.configured))) items.append(button(`${kind === 'reader' ? 'Reader' : 'Screen'}: ${item.name || item.id}`, () => select(kind,item.id)));
-    if (!items.children.length) items.append(node('p', 'No readers or screens assigned.', 'vm-help')); inspector.append(items);
+    inspector.append(items); refreshAssigned();
   }
   if (type === 'reader') {
     const date = new Date(current.lastSeenAt);
@@ -302,7 +325,7 @@ export function updateVenueMap(state={}) {
   connected=state.connected ?? connected;if(!connected && gesture)cancelGesture();
   if(locked)fit();listReaders();syncControls();refreshAssigned();draw();
 }
-setInterval(()=>draw(),1000);syncControls();draw(true);
+setInterval(()=>{if(!gesture){listReaders();refreshAssigned();draw();}},1000);syncControls();draw(true);
 
 
 

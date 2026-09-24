@@ -40,7 +40,7 @@ to move it; Shift and arrows resize a room. Keyboard focus remains visible.
 Green rooms have recent contact from every configured assigned reader; red rooms
 have at least one reader unseen for more than 25 seconds. Grey means no configured
 readers or a disabled room. Team markers show their last registered location.
-Neither colour nor markers prove physical occupancy or puzzle readiness.
+Neither color nor markers prove physical occupancy or puzzle readiness.
 
 ## Prepare a team and wristbands
 

@@ -9,6 +9,15 @@ const $=id=>document.getElementById(id);
 let state={devices:[],readers:[],rooms:[],events:[],sessions:[],leaderboard:[],screens:[],rules:[],media:[],connected:false}, selectedReader=null, diagnosticSignature='';
 const readerName=id=>state.readers.find(reader=>reader.id===id)?.name || 'Unconfigured reader';
 function contact(reader) {return state.connected && Number.isFinite(Date.parse(reader.lastSeenAt)) && Date.now()-Date.parse(reader.lastSeenAt)<=25000;}
+function readerContact(reader) {
+  const online=contact(reader);
+  const label=!state.connected?'Status unavailable':online?'Connected':'No recent contact';
+  const status=node('span',undefined,`reader-contact ${!state.connected?'unknown':online?'online':'offline'}`);
+  const dot=node('span',undefined,'reader-contact-dot');dot.setAttribute('aria-hidden','true');
+  status.append(dot,node('span',label));
+  status.title=!state.connected?'Live connection lost. Reader status cannot be verified.':online?'Reader contacted the server within the last 25 seconds.':'No reader contact in the last 25 seconds.';
+  return status;
+}
 function details() {
   const section=$('reader-details');const reader=state.readers.find(item=>item.id===selectedReader);section.hidden=!reader;if(!reader)return;
   const restoreCloseFocus = section.contains(document.activeElement) && document.activeElement?.tagName === 'BUTTON';
@@ -19,7 +28,7 @@ function details() {
 function diagnostics() {
   const next=JSON.stringify([state.readers.map(reader => [reader.id,reader.name,reader.roomId,reader.role,reader.configured,contact(reader)]),state.rooms.map(room => [room.id,room.name]),state.connected]);
   if(next!==diagnosticSignature){ diagnosticSignature=next;const focus=document.activeElement?.dataset.reader;
-    table($('reader-table'),['Reader','Contact','Room','Role',''],state.readers.map(reader=>{const button=node('button','Details','secondary');button.dataset.reader=reader.id;button.addEventListener('click',()=>{selectedReader=reader.id;details();});return [reader.name || 'Unconfigured reader',node('span',!state.connected?'Unknown':contact(reader)?'Connected':'No recent contact',`status-pill ${contact(reader)?'positive':'warning'}`),state.rooms.find(room=>room.id===reader.roomId)?.name || '—',({entry:'Entry Room',start:'Start time',finish:'Stop time',exit:'Exit Room'})[reader.role] || 'Unassigned',button];}),'No readers discovered yet.');
+    table($('reader-table'),['Reader','Contact','Room','Role',''],state.readers.map(reader=>{const button=node('button','Details','secondary');button.dataset.reader=reader.id;button.addEventListener('click',()=>{selectedReader=reader.id;details();});return [reader.name || 'Unconfigured reader',readerContact(reader),state.rooms.find(room=>room.id===reader.roomId)?.name || '—',({entry:'Entry Room',start:'Start time',finish:'Stop time',exit:'Exit Room'})[reader.role] || 'Unassigned',button];}),'No readers discovered yet.');
     if(focus)[...$('reader-table').querySelectorAll('button')].find(button=>button.dataset.reader===focus)?.focus();
   }
 }

@@ -11,6 +11,8 @@ const routes = new Map([
 function showPage(focus = false) {
   const [page, title] = routes.get(location.pathname) ?? routes.get('/');
   for (const section of document.querySelectorAll('[data-page]')) section.hidden = section.dataset.page !== page;
+  const heading = document.getElementById('page-title');
+  if (heading) heading.textContent = title;
   for (const link of document.querySelectorAll('[data-nav]')) {
     if (link.pathname === location.pathname) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
@@ -18,7 +20,6 @@ function showPage(focus = false) {
   window.dispatchEvent(new CustomEvent('pagechange', { detail: { page } }));
   document.title = `${title} · Adventure Rooms`;
   if (focus) {
-    const heading = document.querySelector(`[data-page="${page}"] h1`);
     heading?.setAttribute('tabindex', '-1');
     heading?.focus({ preventScroll: true });
     window.scrollTo({ top: 0, behavior: 'instant' });

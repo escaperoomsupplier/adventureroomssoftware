@@ -12,6 +12,30 @@
   display:none!important}
 body {
   margin:0}
+.reader-contact {
+  display:inline-flex;
+  align-items:center;
+  gap:9px;
+  font-size:12px;
+  white-space:nowrap;
+  color:#526477}
+.reader-contact.online { color:#16724d }
+.reader-contact.offline { color:#b13a3a }
+.reader-contact-dot {
+  width:8px;
+  height:8px;
+  flex:none;
+  border-radius:50%;
+  background:currentColor}
+.reader-contact:not(.unknown) .reader-contact-dot {
+  animation:reader-contact-pulse 2s ease-in-out infinite}
+@keyframes reader-contact-pulse {
+  0%,100% { box-shadow:0 0 0 0 currentColor; opacity:1 }
+  50% { box-shadow:0 0 0 4px transparent; opacity:.55 }
+}
+@media (prefers-reduced-motion:reduce) {
+  .reader-contact-dot { animation:none!important }
+}
 a {
   color:inherit}
 button,input,select {
@@ -123,7 +147,7 @@ button,input,select {
 .workspace {
   margin-left:234px}
 .topbar {
-  height:74px;
+  height:68px;
   display:flex;
   align-items:center;
   justify-content:space-between;
@@ -131,6 +155,15 @@ button,input,select {
   padding:0 36px;
   border-bottom:1px solid var(--line);
   background:#fff}
+#page-title {
+  margin:0 auto 0 0;
+  font-size:26px;
+  letter-spacing:-.7px;
+  line-height:1.2}
+.page-description {
+  margin:0 0 18px;
+  color:var(--muted);
+  font-size:13px}
 .workspace-label {
   font-size:10px;
   font-weight:700;
@@ -159,8 +192,8 @@ button,input,select {
 main {
   max-width:1500px;
   margin:auto;
-  padding:32px 36px 22px;
-  min-height:calc(100vh - 74px)}
+  padding:20px 36px 22px;
+  min-height:calc(100vh - 68px)}
 .page-heading {
   margin:1px 0 28px}
 .eyebrow {
@@ -633,7 +666,10 @@ main {
   font-size:10px;
   padding:6px 8px}
 main {
-  padding:24px 20px}
+  padding:16px 20px;
+  min-height:calc(100vh - 56px)}
+#page-title {
+  font-size:23px}
 .page-heading {
   margin-bottom:23px}
 h1 {

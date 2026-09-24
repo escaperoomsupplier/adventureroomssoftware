@@ -43,7 +43,13 @@ function activate(){started=true;soundBlocked=false;$('activation').hidden=true;
 $('start').addEventListener('click',activate);$('enable-sound').addEventListener('click',activate);
 music.addEventListener('error',()=>error('Background music unavailable.'));
 function unavailable(){connected=false;started=false;state=null;visualKey='';musicKey='';actionKey='';music.pause();music.removeAttribute('src');music.load();effect.pause();effect.removeAttribute('src');effect.load();cleanup($('background'));cleanup($('action-layer'));$('timers').replaceChildren();$('activation').hidden=false;$('screen-name').textContent='Screen unavailable';$('activation-error').textContent='This screen is unavailable. Choose another screen or wait for its configuration to return.';$('start').disabled=true;$('enable-sound').hidden=true;}
-const live=new EventSource(`/api/screens/${encodeURIComponent(id)}/live`);
+const clientId=Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,'0')).join('');
+const live=new EventSource(`/api/screens/${encodeURIComponent(id)}/live?client=${clientId}`);
+const reportPresence=()=>{if(live.readyState===EventSource.OPEN)fetch(`/api/screens/${encodeURIComponent(id)}/presence`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clientId}),signal:AbortSignal.timeout(5000)}).catch(()=>{});};
+live.onopen=reportPresence;
+setInterval(reportPresence,10000);
+window.addEventListener('pagehide',()=>live.close());
+window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
 live.onmessage=event=>{try{const next=JSON.parse(event.data);if(!next.screen || !next.serverNow || !Array.isArray(next.teams)){unavailable();return;}const reconnect=!connected;state=next;offset=Date.parse(next.serverNow)-Date.now();connected=true;$('connection').hidden=true;$('start').disabled=false;$('activation-error').textContent='';render();if(reconnect && state.playback){if(actionVideo)seek(actionVideo,state.playback.startsAt);if(effect.hasAttribute('src'))seek(effect,state.playback.startsAt);}}catch{$('connection').hidden=false;connected=false;}};
 live.addEventListener('unavailable',unavailable);
 live.onerror=()=>{connected=false;$('connection').hidden=false;renderTimers();};

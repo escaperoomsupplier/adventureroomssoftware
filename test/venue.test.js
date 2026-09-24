@@ -212,12 +212,12 @@ test('exit readers clear only their matching room and emit transactional domain 
   assert.ok(history[0].exitedAt);
   assert.equal(history[0].exitReason, 'reader_exit');
   const events = venue.listDomainEvents();
-  assert.deepEqual(events.map(e => e.type), ['room.entered', 'room.exited']);
-  assert.equal(venue.listDomainEvents(events[0].sequence).length, 1);
+  assert.deepEqual(events.map(e => e.type), ['room.entered', 'room.exited', 'room.exited', 'room.exited']);
+  assert.equal(venue.listDomainEvents(events[0].sequence).length, 3);
   tap(ids[0]);
   venue.updateReader(ids[1], { role: 'entry' }); tap(ids[1]);
   assert.equal(venue.getHistory(team.id)[1].exitReason, 'next_room');
-  assert.equal(venue.listDomainEvents().filter(e => e.type === 'room.exited').length, 1);
+  assert.equal(venue.listDomainEvents().filter(e => e.type === 'room.exited').length, 3);
 });
 
 test('domain events and visit exit changes roll back with the firmware transaction', t => {
@@ -235,4 +235,20 @@ test('domain events and visit exit changes roll back with the firmware transacti
   assert.equal(reception.getSession(team.id).currentRoomId, room.id);
   post('AABBCCDD', true);
   assert.equal(venue.listDomainEvents().length, 2);
+});
+
+
+test('different entry readers and fresh placements trigger automation without duplicate visits',t=>{
+  const {venue,reception,room,team,observe,tap,devices}=setup(t);
+  for(const id of ids){venue.updateReader(id,{configured:true,roomId:room.id,role:'entry'});observe(id);}
+  reception.startSession(team.id);tap(ids[0]);tap(ids[1]);tap(ids[1]);
+  assert.equal(venue.getHistory(team.id).length,1);
+  assert.equal(venue.listDomainEvents().filter(e=>e.type==='room.entered').length,3);
+  venue.updateReader(ids[2],{role:'exit'});tap(ids[2]);tap(ids[2]);
+  assert.equal(venue.listDomainEvents().filter(e=>e.type==='room.exited').length,2);
+  assert.equal(venue.getHistory(team.id).length,1);
+  assert.equal(reception.getSession(team.id).status,'active');
+  const count=venue.listDomainEvents().length;
+  venue.applySnapshot({device:{id:ids[2]},previous:{lastSeenAt:new Date().toISOString()},event:{sequence:5,uid:'AABBCCDD',placed:true,type:'rfid.placed'}});
+  assert.equal(venue.listDomainEvents().length,count);
 });

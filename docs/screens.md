@@ -10,7 +10,7 @@ physical monitor automatically.
 
 A screen's defaults consist of:
 
-- A colour, image or video background.
+- A color, image or video background.
 - Team timers, enabled or disabled.
 - Optional background music and its volume.
 
@@ -42,10 +42,17 @@ Do not move or rename those files independently of their metadata.
 ## Timed automation actions
 
 Use the operator's automation controls to connect a rule to a screen action.
-Each action has an explicit duration of **1 to 3600 seconds**. Its delivery mode is:
+Each action has an explicit duration of **1 to 3600 seconds**. A new action always
+replaces the action currently playing on its target screen. Actions do not queue;
+legacy queue rules are normalized to replacement behavior.
 
-- **Replace**: replace the current action with the new action.
-- **Queue**: wait for earlier actions to finish before playing the new action.
+**Team uses Enter Room reader** fires for each fresh placement on a configured
+Enter Room reader in the selected room. **Team uses Exit Room reader** similarly
+fires for each fresh exit-reader placement. Several readers can trigger actions
+for the same room, and removing and tapping a card again can trigger another
+action without creating a duplicate room visit. Repeated state snapshots are not
+new placements. The card must belong to an active team; start/stop readers do not
+substitute for these entry/exit triggers.
 
 When timed actions finish, the screen returns to its configured defaults. Choose
 an intentional duration even for audio and video rather than assuming a file's
@@ -72,3 +79,11 @@ stops startup with an error and preserves the existing data. Correct the indicat
 file or restore a backup; do not delete runtime state to work around a validation
 error. Environment variables `PORT`, `HOST` and `DISCOVERY` override saved settings
 for the current run.
+
+## Connection indicators
+
+Screen blocks show green while at least one player browser is connected and has
+sent a heartbeat in the last 30 seconds. Closing the last player turns the status
+red; an interrupted network can take up to 30 seconds to expire. This indicates
+browser connectivity, not whether a television is powered on or sound is enabled.
+Reader indicators use the last 25 seconds of controller contact.

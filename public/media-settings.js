@@ -47,8 +47,8 @@ const screenHeading = node('h2', 'Add screen'); screenRoot.append(screenHeading)
 const screenForm = node('form', undefined, 'ms-form'); screenRoot.append(screenForm);
 const screenName = field(screenForm, 'Screen name'); screenName.required = true; screenName.maxLength = 80;
 const screenRoom = field(screenForm, 'Screen room', 'select');
-const backgroundType = field(screenForm, 'Background', 'select'); staticOptions(backgroundType, [['color','Solid colour'],['image','Image'],['video','Video']]);
-const backgroundColor = field(screenForm, 'Background colour', 'color'); backgroundColor.value = '#101827';
+const backgroundType = field(screenForm, 'Background', 'select'); staticOptions(backgroundType, [['color','Solid color'],['image','Image'],['video','Video']]);
+const backgroundColor = field(screenForm, 'Background color', 'color'); backgroundColor.value = '#101827';
 const backgroundMedia = field(screenForm, 'Background media', 'select');
 const showTimers = field(screenForm, 'Show team timers', 'checkbox'); showTimers.checked = true;
 const musicMedia = field(screenForm, 'Background music', 'select');
@@ -97,28 +97,27 @@ const ruleHeading = node('h2', 'Add automation'); rulesRoot.append(ruleHeading);
 const ruleForm = node('form', undefined, 'ms-form'); rulesRoot.append(ruleForm);
 const ruleName = field(ruleForm, 'Automation name'); ruleName.required = true; ruleName.maxLength = 80;
 const ruleRoom = field(ruleForm, 'Trigger room', 'select'); ruleRoom.required = true;
-const ruleTrigger = field(ruleForm, 'When', 'select'); staticOptions(ruleTrigger, [['room.entered','Team enters room'],['room.exited','Team uses Exit Room reader']]);
+const ruleTrigger = field(ruleForm, 'When', 'select'); staticOptions(ruleTrigger, [['room.entered','Team uses Enter Room reader'],['room.exited','Team uses Exit Room reader']]);
 const ruleScreen = field(ruleForm, 'Target screen', 'select'); ruleScreen.required = true;
 const actionType = field(ruleForm, 'Action', 'select'); staticOptions(actionType, [['image','Show image'],['video','Play video'],['audio','Play sound']]);
 const actionMedia = field(ruleForm, 'Action media', 'select'); actionMedia.required = true;
 const actionDuration = field(ruleForm, 'Duration (seconds)', 'number'); actionDuration.min = 1; actionDuration.max = 3600; actionDuration.value = 10; actionDuration.required = true;
 const actionVolume = field(ruleForm, 'Action volume (0–100%)', 'number'); actionVolume.min = 0; actionVolume.max = 100; actionVolume.value = 100;
-const ruleMode = field(ruleForm, 'If another action is playing', 'select'); staticOptions(ruleMode, [['replace','Replace current'],['queue','Queue']]);
 const ruleEnabled = field(ruleForm, 'Automation active', 'checkbox'); ruleEnabled.checked = true;
 const ruleSave = node('button', 'Add automation'); ruleSave.type = 'submit'; ruleForm.append(ruleSave, button('New automation', () => editRule(null)));
-rulesRoot.append(node('p', 'An action returns to the screen defaults when its duration ends. Repeated reader snapshots do not replay an action.', 'field-hint'));
+rulesRoot.append(node('p', 'Each new action replaces the current action and returns to the screen defaults when its duration ends. Repeated reader snapshots do not replay an action.', 'field-hint'));
 const ruleList = node('div', undefined, 'table-wrap ms-list'); rulesRoot.append(ruleList);
 function editRule(rule) {
   ruleId = rule?.id ?? null; ruleHeading.textContent = rule ? `Edit ${rule.name}` : 'Add automation'; ruleSave.textContent = rule ? 'Save automation' : 'Add automation';
   ruleName.value = rule?.name ?? ''; ruleRoom.value = rule?.roomId ?? ''; ruleTrigger.value = rule?.trigger ?? 'room.entered'; ruleScreen.value = rule?.screenId ?? '';
   actionType.value = rule?.action.type ?? 'image'; refreshMediaOptions(); actionMedia.value = rule?.action.mediaId ?? '';
-  actionDuration.value = rule?.action.durationSeconds ?? 10; actionVolume.value = Math.round((rule?.action.volume ?? 1) * 100); ruleMode.value = rule?.mode ?? 'replace'; ruleEnabled.checked = rule?.enabled ?? true;
+  actionDuration.value = rule?.action.durationSeconds ?? 10; actionVolume.value = Math.round((rule?.action.volume ?? 1) * 100); ruleEnabled.checked = rule?.enabled ?? true;
 }
 actionType.addEventListener('change', refreshMediaOptions);
 ruleForm.addEventListener('submit', async event => {
   event.preventDefault();
   const body = { name: ruleName.value.trim(), roomId: ruleRoom.value, trigger: ruleTrigger.value, screenId: ruleScreen.value,
-    action: { type: actionType.value, mediaId: actionMedia.value, durationSeconds: Number(actionDuration.value), volume: Number(actionVolume.value) / 100 }, mode: ruleMode.value, enabled: ruleEnabled.checked };
+    action: { type: actionType.value, mediaId: actionMedia.value, durationSeconds: Number(actionDuration.value), volume: Number(actionVolume.value) / 100 }, mode: 'replace', enabled: ruleEnabled.checked };
   const result = await mutate(() => request(`/api/screen-rules${ruleId ? `/${ruleId}` : ''}`, ruleId ? 'PATCH' : 'POST', body), 'Automation saved.');
   if (result?.rule) editRule(result.rule);
 });
@@ -141,9 +140,9 @@ export function updateMediaSettings(next) {
     const actions = node('div', undefined, 'ms-actions'); const open = node('a', 'Preview', 'text-link'); open.href = `/media/${media.id}`; open.target = '_blank'; open.rel = 'noopener'; actions.append(open, removeButton(`/api/media/${media.id}`, 'Media'));
     return [media.name, media.kind, `${(media.sizeBytes / 1024 / 1024).toFixed(2)} MB`, media.path, actions];
   }), 'No media uploaded yet.');
-  table(ruleList, ['Automation','When','Screen','Mode',''], state.rules.map(rule => {
+  table(ruleList, ['Automation','When','Screen',''], state.rules.map(rule => {
     const actions = node('div', undefined, 'ms-actions'); actions.append(button('Edit', () => editRule(rule)), button('Test', () => mutate(() => request(`/api/screens/${rule.screenId}/preview`, 'POST', { action: rule.action }), 'Preview sent to screen.')), removeButton(`/api/screen-rules/${rule.id}`, 'Automation'));
-    return [rule.name + (rule.enabled ? '' : ' (paused)'), `${rule.trigger === 'room.entered' ? 'Enter' : 'Exit'} ${roomName(rule.roomId)}`, state.screens.find(s => s.id === rule.screenId)?.name ?? 'Unknown', rule.mode, actions];
+    return [rule.name + (rule.enabled ? '' : ' (paused)'), `${rule.trigger === 'room.entered' ? 'Enter' : 'Exit'} ${roomName(rule.roomId)}`, state.screens.find(s => s.id === rule.screenId)?.name ?? 'Unknown', actions];
   }), 'No automations yet.');
   if (requestedScreen) { const screen = state.screens.find(s => s.id === requestedScreen); if (screen) { editScreen(screen); requestedScreen = null; } }
   if (screenId && !state.screens.some(s => s.id === screenId)) editScreen(null);

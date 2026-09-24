@@ -57,6 +57,7 @@ async function readJson(req) {
 export async function startServer({
   host = '0.0.0.0', port = 4000, databasePath = resolve('data/adventure-rooms.sqlite'),
   discovery = true, discoveryOptions = {}, logger = console,
+  presenceNow = Date.now,
   configDirectory = null, legacyDatabasePath = resolve('data/adventure-rooms.sqlite'), mediaDirectory = null,
 } = {}) {
   if (configDirectory) databasePath = await prepareConfigDirectory({ directory: configDirectory, legacyDatabasePath });
@@ -89,13 +90,18 @@ export async function startServer({
   let discoveryError = null;
   const subscribers = new Set();
   const screenSubscribers = new Map();
+  const screenPresence = new Map();
+  let closed = false, presenceSignature = '';
+  const screensWithPresence = () => screens.listScreens().map(screen => ({ ...screen,
+    online: [...screenPresence].some(([res, client]) => !res.destroyed && screenSubscribers.get(res) === screen.id && presenceNow() - client.lastSeen < 30000),
+  }));
   const health = () => ({ status: 'ok', local: true, transport: 'http-ercc',
     discovery: discovery ? (discoveryError ? 'degraded' : 'active') : 'disabled', discoveryError });
-  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: venue.listReaders(), readers: venue.listReaders(), events: store.listEvents(15), sessions: reception.listSessions(), rooms: rooms.listRooms(), leaderboard: venue.listLeaderboard(), screens: screens.listScreens(), rules: screens.listRules(), media: screens.listMedia() })}\n\n`;
+  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: venue.listReaders(), readers: venue.listReaders(), events: store.listEvents(15), sessions: reception.listSessions(), rooms: rooms.listRooms(), leaderboard: venue.listLeaderboard(), screens: screensWithPresence(), rules: screens.listRules(), media: screens.listMedia() })}\n\n`;
   const sendFrame = (res, frame) => {
     // Disconnect slow readers instead of allowing an unbounded outgoing queue.
     if (res.destroyed || res.writableLength > 256 * 1024) {
-      subscribers.delete(res); screenSubscribers.delete(res);
+      subscribers.delete(res); screenSubscribers.delete(res); screenPresence.delete(res);
       res.destroy();
       return;
     }
@@ -105,8 +111,10 @@ export async function startServer({
     try { return `data: ${JSON.stringify(screens.screenState(id, reception.listSessions()))}\n\n`; }
     catch (error) { return `data: ${JSON.stringify({ screen: null, error: error.message })}\n\n`; }
   };
+  const publishOperators = () => { if (!closed && subscribers.size) { const frame = stateFrame(); for (const res of subscribers) sendFrame(res, frame); } };
   const publish = () => {
-    if (subscribers.size) { const frame = stateFrame(); for (const res of subscribers) sendFrame(res, frame); }
+    if (closed) return;
+    publishOperators();
     for (const [res, id] of screenSubscribers) sendFrame(res, screenFrame(id));
   };
   const heartbeat = setInterval(() => {
@@ -115,13 +123,14 @@ export async function startServer({
   heartbeat.unref();
   // Session expiry and playback deadlines are maintained without open operator panels.
   const reconciliation = setInterval(() => {
-    try { captures.sweep(venue.listReaders()); const changed = venue.reconcile(); const playbackChanged = screens.reconcile(); if (changed || playbackChanged) publish(); }
+    try { captures.sweep(venue.listReaders()); const changed = venue.reconcile(); const playbackChanged = screens.reconcile(); const nextPresence = JSON.stringify(screensWithPresence().map(s => [s.id, s.online])); const presenceChanged = nextPresence !== presenceSignature; presenceSignature = nextPresence; if (changed || playbackChanged) publish(); else if (presenceChanged) publishOperators(); }
     catch (error) { logger.error('Venue reconciliation failed:', error.message); }
   }, 1000);
   reconciliation.unref();
   const server = http.createServer(async (req, res) => {
     try {
-      const pathname = new URL(req.url, 'http://localhost').pathname;
+      const requestUrl = new URL(req.url, 'http://localhost');
+      const pathname = requestUrl.pathname;
       if (req.method === 'GET' && ['/rooms', '/rounds'].includes(pathname)) {
         res.writeHead(302, { Location: pathname === '/rounds' ? '/leaderboard' : '/' });
         return res.end();
@@ -133,10 +142,22 @@ export async function startServer({
         req.socket.setTimeout(0); req.socket.setNoDelay(true);
         res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
         res.flushHeaders(); screenSubscribers.set(res, screenLive[1]);
-        res.on('close', () => screenSubscribers.delete(res)); res.on('error', () => { screenSubscribers.delete(res); res.destroy(); });
+        screenPresence.set(res, { clientId: requestUrl.searchParams.get('client'), lastSeen: presenceNow() });
+        const disconnect = () => { screenSubscribers.delete(res); screenPresence.delete(res); publishOperators(); };
+        res.on('close', disconnect); res.on('error', () => { disconnect(); res.destroy(); });
+        if (subscribers.size) { const frame = stateFrame(); for (const subscriber of subscribers) sendFrame(subscriber, frame); }
         sendFrame(res, `retry: 1000\n${screenFrame(screenLive[1])}`); return;
       }
-      if (req.method === 'GET' && pathname === '/api/screens') return json(res, 200, screens.listScreens());
+      const presenceRoute = /^\/api\/screens\/([A-Za-z0-9_-]{1,128})\/presence$/.exec(pathname);
+      if (presenceRoute && req.method === 'POST') {
+        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin changes are not allowed' });
+        const body = await readJson(req);
+        if (typeof body?.clientId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(body.clientId)) return json(res, 400, { error: 'Invalid screen client' });
+        let found = false;
+        for (const [res, client] of screenPresence) if (screenSubscribers.get(res) === presenceRoute[1] && client.clientId === body.clientId) { client.lastSeen = presenceNow(); found = true; }
+        return json(res, found ? 200 : 409, { connected: found });
+      }
+      if (req.method === 'GET' && pathname === '/api/screens') return json(res, 200, screensWithPresence());
       if (req.method === 'GET' && pathname === '/api/screen-rules') return json(res, 200, screens.listRules());
       if (req.method === 'GET' && pathname === '/api/media') return json(res, 200, screens.listMedia());
       const mediaFile = /^\/media\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
@@ -367,7 +388,6 @@ export async function startServer({
     store.close();
     throw error;
   }
-  let closed = false;
   return { server, store, reception, rooms, venue, captures, screens, config, media, address: server.address(), async close() {
     if (closed) return;
     closed = true;
