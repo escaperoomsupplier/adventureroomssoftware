@@ -142,7 +142,7 @@ and screens. Multiple readers can belong to a room, each backed by its own UUPC.
 
 Room names appear inside their rectangles. Green indicates recent contact from all
 configured assigned readers, red indicates a stale reader, and grey indicates no
-configured readers or a disabled room. Active team markers show the last registered
+configured readers. Active team markers show the last registered
 room, not verified physical occupancy. Unsaved inspector fields survive live updates.
 
 Use **Add screen** to create a display block. Select it to assign a room, change its
@@ -151,15 +151,14 @@ player setup, media uploads and automation.
 
 ## Reader roles and team history
 
-- **Entry Room** records the active team's arrival in the assigned enabled room.
+- **Entry Room** records the active team's arrival in the assigned room.
 - **Start time** starts a pending team's session and records its room arrival when assigned.
 - **Stop time** finishes an active team's game and creates its elapsed-time result.
 
 - **Exit Room** records departure from the assigned room without stopping the game clock.
 
 Readers may be left unassigned to a room, for example a start or finish station.
-A disabled assigned room prevents that reader from processing team visits. The
-team's displayed room is its last recorded arrival, not a physical occupancy check.
+The team's displayed room is its last recorded arrival, not a physical occupancy check.
 Repeated snapshots and additional scans within the same room do not add duplicate
 visits. Selecting a team on Overview displays its visit history.
 
