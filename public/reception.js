@@ -1,5 +1,5 @@
 const root = document.getElementById('reception');
-root.innerHTML = `<div class="rc-layout"><form id="rc-team-form" class="rc-panel"><h2>Add a team</h2><p class="rc-hint">Prepare the team now. Their time starts only when you press Start.</p><label for="rc-name">Team name</label><input id="rc-name" required maxlength="80" autocomplete="off"><div class="rc-duration"><div><label for="rc-hours">Hours</label><input id="rc-hours" type="number" min="0" max="12" value="1" required></div><div><label for="rc-minutes">Minutes</label><input id="rc-minutes" type="number" min="0" max="59" value="0" required></div></div><p class="rc-hint">Total duration: 1 minute to 12 hours.</p><button type="submit">Add team</button></form><form id="rc-card-form" class="rc-panel"><h2>Assign wristbands</h2><label for="rc-target">Team</label><select id="rc-target" required><option value="">Select a team</option></select><label for="rc-reader">Reader</label><select id="rc-reader"><option value="">Select a configured reader</option></select><div class="rc-actions"><button id="rc-read" type="button">Read card</button><button id="rc-cancel-read" type="button" class="secondary" hidden>Cancel reading</button></div><p id="rc-capture-status" class="rc-hint" role="status">Press Read card, then tap a wristband. Remove any card already on the reader and tap it again.</p><label for="rc-uid">Card UID</label><input id="rc-uid" required pattern="[0-9a-fA-F]{8}" minlength="8" maxlength="8" placeholder="12AB34CD" autocomplete="off" spellcheck="false"><p class="rc-hint">You can also enter the UID manually. Review it, then assign the card. Each team can have multiple wristbands.</p><button type="submit">Assign card</button></form></div><p id="rc-error" role="alert" hidden></p><p id="rc-message" role="status"></p><div class="rc-section-heading"><h2>Teams</h2><span id="rc-connection" class="rc-hint">Waiting for live data…</span></div><div id="rc-teams"></div>`;
+root.innerHTML = `<div class="rc-layout"><form id="rc-team-form" class="rc-panel"><h2>Add a team</h2><p class="rc-hint">Prepare the team now. Start their time here or by tapping an assigned wristband on a configured start reader.</p><label for="rc-name">Team name</label><input id="rc-name" required maxlength="80" autocomplete="off"><div class="rc-duration"><div><label for="rc-hours">Hours</label><input id="rc-hours" type="number" min="0" max="12" value="1" required></div><div><label for="rc-minutes">Minutes</label><input id="rc-minutes" type="number" min="0" max="59" value="0" required></div></div><p class="rc-hint">Total duration: 1 minute to 12 hours.</p><button type="submit">Add team</button></form><form id="rc-card-form" class="rc-panel"><h2>Assign wristbands</h2><label for="rc-target">Team</label><select id="rc-target" required><option value="">Select a team</option></select><label for="rc-reader">Reader</label><select id="rc-reader"><option value="">Select a configured reader</option></select><div class="rc-actions"><button id="rc-read" type="button">Read card</button><button id="rc-cancel-read" type="button" class="secondary" hidden>Cancel reading</button></div><p id="rc-capture-status" class="rc-hint" role="status">Press Read card, then tap a wristband. Remove any card already on the reader and tap it again.</p><label for="rc-uid">Card UID</label><input id="rc-uid" required pattern="[0-9a-fA-F]{8}" minlength="8" maxlength="8" placeholder="12AB34CD" autocomplete="off" spellcheck="false"><p class="rc-hint">You can also enter the UID manually. Review it, then assign the card. Each team can have multiple wristbands.</p><button type="submit">Assign card</button></form></div><p id="rc-error" role="alert" hidden></p><p id="rc-message" role="status"></p><div class="rc-section-heading"><h2>Teams</h2><span id="rc-connection" class="rc-hint">Waiting for live data…</span></div><div id="rc-teams"></div>`;
 const $ = (id) => document.getElementById(id);
 let sessions = [], readers = [], connected = false, pending = false;
 let capture = null, captureGeneration = 0, captureTimer = null, captureArming = false;
@@ -35,14 +35,14 @@ function timers() {
   for (const element of $('rc-teams').querySelectorAll('[data-session-id]')) {
     const session = sessions.find((s) => s.id === element.dataset.sessionId);
     if (!session) continue;
-    element.textContent = session.status === 'pending' ? `${formatDuration(session.durationMinutes * 60000)} available · not started`
+    element.textContent = !connected ? 'Unavailable while disconnected' : session.status === 'pending' ? `${formatDuration(session.durationMinutes * 60000)} available · not started`
       : session.status === 'active' ? `${formatDuration(Date.parse(session.endsAt) - Date.now())} remaining`
       : `${formatDuration(session.elapsedMs)} elapsed`;
   }
   controls();
 }
 function render() {
-  const signature = JSON.stringify(sessions);
+  const signature = JSON.stringify(sessions.map(({ elapsedMs, ...session }) => session));
   if (signature !== teamSignature) {
     teamSignature = signature;
     const focusedKey = document.activeElement?.dataset.actionKey;
@@ -138,7 +138,7 @@ $('rc-team-form').addEventListener('submit', async (event) => {
   event.preventDefault(); const name = $('rc-name').value.trim();
   const durationMinutes = Number($('rc-hours').value) * 60 + Number($('rc-minutes').value);
   if (!name || !Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 720) { showError(new Error('Enter a team name and a duration between 1 and 720 minutes.')); return; }
-  const result = await mutate('/api/reception/sessions', 'POST', { name, durationMinutes }, 'Team added. Press Start when they are ready.');
+  const result = await mutate('/api/reception/sessions', 'POST', { name, durationMinutes }, 'Team added. Press Start or tap an assigned wristband on a start reader when ready.');
   if (result?.session) { $('rc-name').value = ''; $('rc-target').value = result.session.id; controls(); }
 });
 $('rc-card-form').addEventListener('submit', async (event) => {

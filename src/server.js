@@ -18,7 +18,7 @@ const assets = new Map([
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/reception.js', ['reception.js', 'text/javascript; charset=utf-8']],
   ...['venue-map', 'reception', 'workflow'].map(name => [`/${name}.css`, [`${name}.css`, 'text/css; charset=utf-8']]),
-  ...['venue-map', 'leaderboard'].map(name => [`/${name}.js`, [`${name}.js`, 'text/javascript; charset=utf-8']]),
+  ...['venue-map', 'leaderboard', 'ui'].map(name => [`/${name}.js`, [`${name}.js`, 'text/javascript; charset=utf-8']]),
   ['/navigation.js', ['navigation.js', 'text/javascript; charset=utf-8']],
   ['/overview.js', ['overview.js', 'text/javascript; charset=utf-8']],
 ]);
@@ -259,7 +259,7 @@ export async function startServer({
       server.once('error', reject);
       server.listen(port, host, () => { server.removeListener('error', reject); accept(); });
     });
-    // A failed second listener must not interrupt the running server's rounds.
+    // Establish runtime baselines only after this listener binds successfully.
     venue.reconcile({ restart: true });
     if (discovery) {
       discoveryHandle = await startDiscovery({ ...discoveryOptions,

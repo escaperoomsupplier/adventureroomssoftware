@@ -75,7 +75,7 @@ test('acknowledges firmware sub-sensor roster without creating RFID events', asy
 test('serves local assets, reports discovery disabled and exposes no command endpoint', async t => {
   const { url } = await fixture(t);
   assert.equal((await (await fetch(`${url}/api/health`)).json()).discovery, 'disabled');
-  for (const asset of ['/', '/reception', '/rounds', '/rooms', '/devices', '/app.js', '/style.css', '/reception.js', '/rooms.js', '/rounds.js', '/navigation.js', '/overview.js']) {
+  for (const asset of ['/', '/reception', '/leaderboard', '/devices', '/app.js', '/style.css', '/reception.js', '/ui.js', '/venue-map.js', '/venue-map.css', '/reception.css', '/workflow.css', '/leaderboard.js', '/navigation.js', '/overview.js']) {
     const response = await fetch(`${url}${asset}`);
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-security-policy'), /default-src 'self'/);
@@ -84,125 +84,172 @@ test('serves local assets, reports discovery disabled and exposes no command end
   assert.equal((await fetch(`${url}/api/command`, { method: 'POST' })).status, 404);
   assert.equal((await fetch(`${url}/unknown-page`)).status, 404);
   assert.equal((await fetch(`${url}/reception`, { method: 'POST' })).status, 404);
+  for (const [path, target] of [['/rooms', '/'], ['/rounds', '/leaderboard']]) {
+    const response = await fetch(`${url}${path}`, { redirect: 'manual' });
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('location'), target);
+  }
 });
 
-async function prepareRound(app) {
+async function write(url, path, body = {}, method = 'POST', headers = {}) {
+  return fetch(`${url}${path}`, { method, headers: { 'Content-Type': 'application/json', Origin: url, ...headers },
+    ...(method === 'DELETE' ? {} : { body: JSON.stringify(body) }) });
+}
+async function prepareVenue(app, url) {
   await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0')));
-  const room = app.rooms.createRoom({ name: 'Library', deviceId: id });
-  const session = app.reception.createSession({ name: 'Team One', durationMinutes: 60 });
-  app.reception.assignCard(session.id, 'AABBCCDD');
+  const { room } = await (await write(url, '/api/rooms', { name: 'Library' })).json();
+  const { session } = await (await write(url, '/api/reception/sessions', { name: 'Team One', durationMinutes: 60 })).json();
+  await write(url, `/api/reception/sessions/${session.id}/cards`, { uid: 'AABBCCDD' });
+  await write(url, `/api/readers/${id}`, { name: 'Start gate', configured: true, roomId: room.id, role: 'start' }, 'PATCH');
   return { room, session };
 }
 
-test('firmware placements register a team and later state changes resolve a round exactly once locally', async t => {
+test('reader roles start pending teams, record multiple rooms, finish and remove ranking without losing history', async t => {
   const { app, url } = await fixture(t);
-  const { room, session } = await prepareRound(app);
+  const { room, session } = await prepareVenue(app, url);
   const live = await openLive(t, url);
-  assert.deepEqual((await live.next()).rounds, []);
-  const packet = (card, state) => ({ ...payload(card), universal_state: { ...payload(card).universal_state, machine_state: String(state) } });
-  assert.match(await firmwarePost(app.address.port, JSON.stringify(packet('AABBCCDD_1', 0))), /200 OK/);
-  const registered = await live.next();
-  assert.equal(registered.rounds.length, 1);
-  assert.equal(registered.rounds[0].status, 'tracking');
-  assert.equal(registered.rounds[0].roomId, room.id);
-  assert.equal(registered.rounds[0].sessionId, session.id);
-  assert.equal(registered.scans[0].decision, 'accepted');
-  await firmwarePost(app.address.port, JSON.stringify(packet('AABBCCDD_1', 0)));
-  assert.equal((await live.next()).scans.length, 1);
-  await firmwarePost(app.address.port, JSON.stringify(packet('AABBCCDD_0', 1)));
-  assert.ok((await live.next()).rounds[0].firstActivityAt);
-  await firmwarePost(app.address.port, JSON.stringify(packet('AABBCCDD_0', 2)));
-  const won = (await live.next()).rounds[0];
-  assert.equal(won.status, 'won');
-  await firmwarePost(app.address.port, JSON.stringify(packet('AABBCCDD_0', 2)));
-  assert.deepEqual((await live.next()).rounds, [won]);
-  await firmwarePost(app.address.port, JSON.stringify(packet('AABBCCDD_1', 2)));
-  const blocked = await live.next();
-  assert.equal(blocked.scans[0].reason, 'controller_not_ready');
-  assert.deepEqual(blocked.rounds, [won]);
-  assert.deepEqual((await (await fetch(`${url}/api/rounds`)).json()).rounds, [won]);
+  assert.equal((await live.next()).sessions[0].status, 'pending');
+  const packet = payload('AABBCCDD_1'); packet.universal_state.machine_state = '3';
+  await firmwarePost(app.address.port, JSON.stringify(packet));
+  const started = await live.next();
+  assert.equal(started.sessions[0].status, 'active');
+  assert.equal(started.sessions[0].currentRoomId, room.id);
+  await firmwarePost(app.address.port, JSON.stringify(packet));
+  await live.next();
+  let visits = (await (await fetch(`${url}/api/reception/sessions/${session.id}/history`)).json()).visits;
+  assert.equal(visits.length, 1);
+  assert.equal(visits[0].readerName, 'Start gate');
+  const { room: next } = await (await write(url, '/api/rooms', { name: 'Archive' })).json();
+  await live.next();
+  const secondId = '0123456789ABCE';
+  await firmwarePost(app.address.port, JSON.stringify({ ...payload('00000000_0'), id: secondId }));
+  await live.next();
+  const patched = await write(url, `/api/readers/${secondId}`, { name: 'Finish gate', configured: true, roomId: next.id, role: 'finish' }, 'PATCH');
+  assert.equal((await patched.json()).reader.name, 'Finish gate'); await live.next();
+  await firmwarePost(app.address.port, JSON.stringify({ ...packet, id: secondId }));
+  const finished = await live.next();
+  assert.equal(finished.sessions[0].status, 'finished');
+  assert.equal(finished.sessions[0].currentRoomId, next.id);
+  assert.equal(finished.leaderboard.length, 1);
+  visits = (await (await fetch(`${url}/api/reception/sessions/${session.id}/history`)).json()).visits;
+  assert.deepEqual(visits.map(v => v.roomName), ['Library', 'Archive']);
+  const result = (await (await fetch(`${url}/api/leaderboard`)).json())[0];
+  assert.equal((await write(url, `/api/leaderboard/${result.id}`, {}, 'DELETE', { Origin: 'http://example.invalid' })).status, 403);
+  assert.equal((await write(url, `/api/leaderboard/${result.id}`, {}, 'DELETE')).status, 200);
+  assert.deepEqual((await live.next()).leaderboard, []);
+  await write(url, `/api/reception/sessions/${session.id}/end`); await live.next();
+  assert.deepEqual(await (await fetch(`${url}/api/leaderboard`)).json(), []);
+  assert.equal((await (await fetch(`${url}/api/reception/sessions/${session.id}/history`)).json()).visits.length, 2);
 });
 
-test('round storage failure rolls back the entire firmware receipt so a retry can register the scan', async t => {
-  const { app } = await fixture(t);
-  await prepareRound(app);
+test('explicit card capture suppresses gameplay, completes only after commit and rolls back on storage failure', async t => {
+  const { app, url } = await fixture(t);
+  const { session } = await prepareVenue(app, url);
+  const response = await write(url, `/api/readers/${id}/capture`);
+  assert.equal(response.status, 201);
+  const { capture } = await response.json();
+  assert.equal(capture.status, 'waiting');
+  assert.equal((await write(url, `/api/readers/${id}/capture`)).status, 409);
   const before = app.store.listDevices();
-  const applySnapshot = app.rounds.applySnapshot;
-  app.rounds.applySnapshot = function (recorded) {
-    applySnapshot.call(this, recorded);
-    throw new Error('Simulated storage failure after round creation');
-  };
-  const card = JSON.stringify(payload('AABBCCDD_1'));
-  assert.match(await firmwarePost(app.address.port, card), /500 Internal Server Error/);
+  const original = app.venue.applySnapshot;
+  app.venue.applySnapshot = function(data) { original.call(this, data); throw new Error('Storage failure'); };
+  assert.match(await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1'))), /500 Internal Server Error/);
   assert.deepEqual(app.store.listDevices(), before);
   assert.deepEqual(app.store.listEvents(), []);
-  assert.deepEqual(app.rounds.listRounds(), []);
-  assert.deepEqual(app.rounds.listScans(), []);
-  app.rounds.applySnapshot = applySnapshot;
-  assert.match(await firmwarePost(app.address.port, card), /200 OK/);
-  assert.equal(app.rounds.listRounds().length, 1);
-  assert.equal(app.rounds.listScans().length, 1);
-});
-
-test('operators can close tracking and session changes reconcile it without controlling hardware', async t => {
-  const { app, url } = await fixture(t);
-  const { session } = await prepareRound(app);
+  assert.equal((await (await fetch(`${url}/api/captures/${capture.id}`)).json()).capture.status, 'waiting');
+  app.venue.applySnapshot = original;
   await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
-  const round = app.rounds.listRounds()[0];
-  const post = (path, body, headers = {}) => fetch(`${url}${path}`, { method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: url, ...headers }, body: JSON.stringify(body) });
-  const closePath = `/api/rounds/${round.id}/close`;
-  assert.equal((await post(closePath, {}, { Origin: 'http://example.invalid' })).status, 403);
-  assert.equal((await post(closePath, null)).status, 400);
-  assert.equal((await post(closePath, {}, { 'Content-Type': 'text/plain' })).status, 415);
-  assert.equal((await post('/api/rounds/missing/close', {})).status, 404);
-  const closed = await post(closePath, {});
-  assert.equal(closed.status, 200);
-  assert.equal((await closed.json()).round.reason, 'operator_closed');
-  assert.equal((await post(closePath, {})).status, 200);
+  const captured = (await (await fetch(`${url}/api/captures/${capture.id}`)).json()).capture;
+  assert.equal(captured.status, 'captured'); assert.equal(captured.uid, 'AABBCCDD');
+  assert.equal(app.reception.getSession(session.id).status, 'pending');
+  assert.deepEqual(app.venue.getHistory(session.id), []);
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  assert.equal(app.reception.getSession(session.id).status, 'pending');
   await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_0')));
   await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
-  assert.equal(app.rounds.listRounds().filter(r => r.status === 'tracking').length, 1);
-  assert.equal((await post(`/api/reception/sessions/${session.id}/end`, {})).status, 200);
-  assert.equal(app.rounds.listRounds().filter(r => r.status === 'tracking').length, 0);
-  assert.equal(app.rounds.listRounds()[0].reason, 'session_ended');
-  assert.equal(app.store.listDevices()[0].machineState, 0);
+  assert.equal(app.reception.getSession(session.id).status, 'active');
 });
 
-test('server restart retains history and requires review of unfinished tracking', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'adventure-round-restart-'));
+test('capture requires configured baseline reader and supports cancellation and expiration', async t => {
+  const { app, url } = await fixture(t);
+  await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0')));
+  assert.equal((await write(url, `/api/readers/${id}/capture`)).status, 409);
+  await write(url, `/api/readers/${id}`, { configured: true }, 'PATCH');
+  const { capture } = await (await write(url, `/api/readers/${id}/capture`)).json();
+  assert.equal((await write(url, `/api/captures/${capture.id}`, {}, 'DELETE', { Origin: 'http://example.invalid' })).status, 403);
+  const cancelled = await write(url, `/api/captures/${capture.id}`, {}, 'DELETE');
+  assert.equal((await cancelled.json()).capture.status, 'cancelled');
+  const { capture: expiring } = await (await write(url, `/api/readers/${id}/capture`)).json();
+  app.captures.now = () => Date.parse(expiring.expiresAt) + 1;
+  assert.equal((await (await fetch(`${url}/api/captures/${expiring.id}`)).json()).capture.status, 'expired');
+});
+
+test('server restart preserves active timers and requires a fresh placement before recording another visit', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'adventure-venue-restart-'));
   const options = { host: '127.0.0.1', port: 0, databasePath: join(directory, 'test.sqlite'), discovery: false, logger: silent };
   let app = await startServer(options);
   t.after(async () => { await app.close(); await rm(directory, { recursive: true, force: true }); });
-  await prepareRound(app);
+  const { session } = await prepareVenue(app, `http://127.0.0.1:${app.address.port}`);
   await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
-  assert.equal(app.rounds.listRounds()[0].status, 'tracking');
+  const startedAt = app.reception.getSession(session.id).startedAt;
+  app.reception.assignCard(session.id, '12345678');
   await assert.rejects(startServer({ ...options, port: app.address.port }), { code: 'EADDRINUSE' });
-  assert.equal(app.rounds.listRounds()[0].status, 'tracking');
-  await app.close();
-  app = await startServer(options);
-  const round = app.rounds.listRounds()[0];
-  assert.equal(round.status, 'needs_review');
-  assert.equal(round.reason, 'server_restart');
-  const win = payload('AABBCCDD_1');
-  win.universal_state.machine_state = '2';
-  await firmwarePost(app.address.port, JSON.stringify(win));
-  assert.deepEqual(app.rounds.listRounds(), [round]);
-  assert.equal(app.rounds.listScans().length, 1);
+  const next = app.rooms.createRoom({ name: 'Next' });
+  app.venue.updateReader(id, { roomId: next.id, role: 'entry' });
+  await app.close(); app = await startServer(options);
+  await firmwarePost(app.address.port, JSON.stringify(payload('12345678_1')));
+  assert.equal(app.reception.getSession(session.id).status, 'active');
+  assert.equal(app.reception.getSession(session.id).startedAt, startedAt);
+  assert.equal(app.venue.getHistory(session.id).length, 1);
+  await firmwarePost(app.address.port, JSON.stringify(payload('12345678_0')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('12345678_1')));
+  assert.equal(app.venue.getHistory(session.id).length, 2);
 });
 
-test('session expiry closes tracking and notifies live clients without further device traffic', async t => {
+test('session expiry notifies live clients without further device traffic', async t => {
   const { app, url } = await fixture(t);
-  const { session } = await prepareRound(app);
+  const { session } = await prepareVenue(app, url);
   await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
   const live = await openLive(t, url);
-  assert.equal((await live.next()).rounds[0].status, 'tracking');
+  assert.equal((await live.next()).sessions[0].status, 'active');
   app.store.db.prepare('UPDATE reception_sessions SET ends_at=? WHERE id=?').run(Date.now() - 1, session.id);
-  const state = await live.next();
-  assert.equal(state.rounds[0].reason, 'session_expired');
-  assert.equal(state.sessions[0].status, 'expired');
+  assert.equal((await live.next()).sessions[0].status, 'expired');
 });
 
+test('event endpoints and live snapshots expose at most fifteen newest events', async t => {
+  const { app, url } = await fixture(t);
+  await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0')));
+  for (let i = 0; i < 20; i++) await firmwarePost(app.address.port, JSON.stringify(payload(`AABBCCDD_${i % 2 ? 0 : 1}`)));
+  const events = await (await fetch(`${url}/api/events`)).json();
+  assert.equal(events.length, 15);
+  assert.equal(events[0].sequence, 20);
+  assert.equal(events[14].sequence, 6);
+  const live = await openLive(t, url);
+  assert.deepEqual((await live.next()).events, events);
+});
+
+test('reader partial configuration supports multiple readers per room and durable geometry clamping', async t => {
+  const { app, url } = await fixture(t);
+  const { room } = await prepareVenue(app, url);
+  const secondId = '0123456789ABCE';
+  await firmwarePost(app.address.port, JSON.stringify({ ...payload('00000000_0'), id: secondId }));
+  await write(url, `/api/readers/${secondId}`, { configured: true, roomId: room.id, role: 'entry', x: 200, y: 150 }, 'PATCH');
+  const renamed = await write(url, `/api/readers/${secondId}`, { name: 'Side door' }, 'PATCH');
+  const reader = (await renamed.json()).reader;
+  assert.equal(reader.name, 'Side door');
+  assert.equal(reader.configured, true);
+  assert.equal(reader.role, 'entry');
+  assert.equal(reader.roomId, room.id);
+  const readers = await (await fetch(`${url}/api/readers`)).json();
+  assert.equal(readers.filter(item => item.roomId === room.id).length, 2);
+  await write(url, `/api/rooms/${room.id}`, { width: 120, height: 80, x: 42 }, 'PATCH');
+  const moved = (await (await fetch(`${url}/api/readers`)).json()).find(item => item.id === secondId);
+  assert.equal(moved.x, 120); assert.equal(moved.y, 80);
+  assert.equal((await write(url, `/api/readers/${secondId}`, { role: 'invalid' }, 'PATCH')).status, 400);
+  assert.equal((await write(url, `/api/readers/${secondId}`, { configured: 'true' }, 'PATCH')).status, 400);
+  assert.equal((await write(url, `/api/readers/${secondId}`, { name: 'Blocked' }, 'PATCH', { Origin: 'http://example.invalid' })).status, 403);
+  assert.equal((await write(url, '/api/readers/UNKNOWN_DEVICE', {}, 'PATCH')).status, 404);
+});
 test('startup bind failure releases database and does not announce discovery', async t => {
   const { app } = await fixture(t);
   await assert.rejects(startServer({ host: '127.0.0.1', port: app.address.port, databasePath: ':memory:', discovery: false, logger: silent }), { code: 'EADDRINUSE' });
@@ -268,6 +315,8 @@ test('reception mutations enforce card ownership and publish session updates', a
   const created = await post('/api/reception/sessions', { name: 'Team One', durationMinutes: 60 });
   assert.equal(created.status, 201);
   const { session: first } = await created.json();
+  assert.equal(first.status, 'pending');
+  assert.equal(first.startedAt, null);
   assert.equal((await live.next()).sessions[0].teamName, 'Team One');
   const secondResponse = await post('/api/reception/sessions', { name: 'Team Two', durationMinutes: 90 });
   const { session: second } = await secondResponse.json();
@@ -286,10 +335,13 @@ test('reception mutations enforce card ownership and publish session updates', a
   await live.next();
   assert.equal((await post(cardPath(second.id), { uid: 'AABBCCDD' })).status, 200);
   await live.next();
+  const started = await post(`/api/reception/sessions/${second.id}/start`, {});
+  assert.equal((await started.json()).session.status, 'active');
+  await live.next();
   const ended = await post(`/api/reception/sessions/${second.id}/end`, {});
   assert.equal(ended.status, 200);
   const state = await live.next();
-  assert.equal(state.sessions.find(s => s.id === second.id).status, 'ended');
+  assert.equal(state.sessions.find(s => s.id === second.id).status, 'finished');
   assert.deepEqual(state.sessions.find(s => s.id === second.id).cards, []);
   assert.equal((await (await fetch(`${url}/api/reception/sessions`)).json()).length, 2);
 });

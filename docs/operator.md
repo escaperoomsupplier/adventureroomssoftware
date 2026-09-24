@@ -1,36 +1,91 @@
 # Local operator panel
 
-The panel on the application server (default: `http://127.0.0.1:4000`) manages team sessions, card assignments, rooms and passive round tracking. It also displays known UUPC devices, their last contact, machine state and RFID events. All assets ship with the project: no cloud, CDN or external fonts are used. Changes are saved locally; the panel sends no hardware commands.
-
-Updates arrive immediately through server-sent events (SSE over HTTP). A full snapshot is sent on connection and reconnection to restore the current view. The panel does not poll every two seconds.
+The local application (default `http://127.0.0.1:4000`) manages teams, wristbands,
+room layouts, reader roles, visit history and an elapsed-time leaderboard. All
+assets are local. No cloud account or Internet connection is required during use.
+Configuration and team actions send no commands to physical hardware.
 
 ## Navigation
 
-The sidebar separates daily tasks into five pages:
+- **Overview** (`/`): interactive venue map, teams and selectable visit histories.
+- **Reception** (`/reception`): prepare teams, assign wristbands, start and finish games.
+- **Leaderboard** (`/leaderboard`): completed games ordered by total elapsed time.
+- **Diagnostics** (`/devices`): readers, selectable details and the latest 15 RFID events.
 
-- **Overview** (`/`): active sessions, tracked rounds, enabled rooms and controller contact at a glance.
-- **Reception** (`/reception`): create sessions and assign wristbands.
-- **Rounds** (`/rounds`): active tracking, completed outcomes and scan decisions.
-- **Rooms** (`/rooms`): room names, controller assignments and enabled settings.
-- **Diagnostics** (`/devices`): detailed UUPC status and raw RFID events.
+Pages support direct links and browser Back/Forward. Navigation preserves forms
+and maintains one live SSE connection. Reloading discards unsaved form entries.
+When live updates disconnect, displayed data may be stale; wait for reconnection
+before relying on it. Reconnection refreshes the current view.
 
-Each page can be bookmarked or opened directly. Back and Forward work normally.
-Switching pages keeps unfinished form entries and maintains one live connection.
-Reloading the browser discards unsaved entries. Overview counters show a dash when
-the live connection is unavailable; connected controllers are not necessarily ready
-or unoccupied rooms.
+## Set up the venue
 
-One RFID reader per UUPC is assumed. A controller is marked inactive after 25 seconds without an update. This is diagnostic information, not proof of a failure. If the server connection is lost, the last data remains visible with a warning. Event timestamps indicate receipt at the server, not the reading time on the device.
+1. On Overview, unlock the map and choose **Add room**. Enter its name and save.
+2. Drag the room to position it and use its corner handle to resize. Empty space
+   pans the map; the zoom controls change scale. Numeric fields below the map
+   provide a keyboard alternative to dragging and resizing.
+3. Select a discovered reader from the list on the right. Enter a friendly name,
+   choose its room and role, and press **Add reader** to configure it explicitly.
+4. Place configured readers by dragging them from the list onto a room, moving
+   their markers within the room, or editing their room and coordinates below.
+5. Lock the map when finished. It automatically fits all rooms, and selection
+   still works for inspecting rooms and readers.
 
-## Team sessions and cards
+A room can have several readers; the physical connection remains one RFID reader
+per UUPC. Green rooms have recent contact from every configured assigned reader;
+red rooms have at least one reader unseen for more than 25 seconds. Grey means
+no configured readers or a disabled room. Contact is not proof that a room is empty
+or that its puzzle is ready. Disabling a room prevents assigned reader roles from
+processing team visits; it does not disable hardware.
 
-1. Enter the team name, choose the duration and create the session. Its clock starts immediately.
-2. Select that session in the card assignment form.
-3. Type the card UID or select a reader and explicitly copy its last known reading.
-4. Check the UID and choose **Assign card**. A card assigned to another active session is rejected.
-5. Use **Release** to remove a card assignment or **End session** to finish the visit. Expired sessions no longer reserve their cards.
+## Prepare a team and wristbands
 
-Each session may have several cards. Card assignment is deliberate and never triggered automatically by a reader. Changes appear in other connected panels immediately. A session's expiry is enforced by the server, including after a restart. These actions do not control a room or change a score.
+1. Enter the team name and duration using **Hours** and **Minutes**. The default
+   is 1 hour, 0 minutes; total duration must be 1 minute to 12 hours.
+2. Choose **Add team**. The team is pending and its clock has not started.
+3. Select the team and a configured reader in the wristband form.
+4. Press **Read card**, then remove and tap the wristband. A new reading fills
+   the UID field; an old last-known card is not reused automatically.
+5. Review the UID and press **Assign card**. Manual UID entry is also available.
+   Repeat for further wristbands belonging to that team.
+6. Press **Start** when the team is ready, or use a configured start reader.
+
+Cards reserved by another pending or active team cannot be assigned. Release a
+card to reuse it. Cancelling a pending team creates no game result. Finishing an
+active game releases its cards and creates an elapsed-time result. Expiry releases
+cards but does not count as successful completion. Deadlines persist after restart.
+
+## Follow a game
+
+An **entry** reader records an active team's arrival in its assigned room. A
+**start** reader starts a pending team and can also record its first room. A
+**finish** reader finishes an active game. Start and finish stations can be left
+unassigned to a room. All assigned rooms must be enabled for their readers' roles
+to process the scan.
+
+Overview shows the team's last recorded room. Select the team to inspect its
+visit history. Repeated snapshots do not create extra visits; further taps in the
+same room do not create another arrival until the team moves elsewhere. Removing
+a wristband from a reader does not by itself end the game.
+
+Following server startup or a known contact gap, first allow the reader baseline
+to recover, then remove and tap the card again. A recovery snapshot is not proof
+of a fresh arrival. Use existing physical room controls to operate puzzles: card
+roles manage software records only. A controller's reported win is not the same
+as finishing the whole team's game.
+
+## Leaderboard
+
+Completed games are listed fastest first by **total elapsed time**, from the
+team's start to its finish. This is neither a points score nor a sum of room times.
+Use **Remove** to exclude a result from the displayed leaderboard. The stored
+result and visit history are retained; removing a result does not erase the team.
+
+## Diagnostics
+
+Select a reader to inspect its ID, firmware details, last contact and last RFID
+state. The compact event table shows the latest 15 events. Timestamps describe
+receipt at the server, not the precise reading time on the device. Reader names
+help operators identify hardware without hiding its underlying ID.
 
 ## Simulator without hardware
 
@@ -61,38 +116,16 @@ npm run simulate
 
 Node.js 24.11 or newer is required. The simulator accepts loopback destinations only and sends four full firmware-shaped packets to `POST /`: baseline `00000000_0`, placement `12AB34CD_1`, an identical snapshot, and removal `12AB34CD_0`. Its device ID is `SIMULATOR00001` (14 characters). Expect two new RFID events; the repeated snapshot is not a new placement. The simulator does not test UDP, discover devices or control hardware. The data is synthetic; do not use real wristband identifiers in examples committed to Git.
 
-To test the complete tracking flow on the separate demo server:
+To exercise the UI, run the simulator once to discover its controller, then configure
+it as a named reader on Overview. Create a pending team, assign its synthetic UID
+`12AB34CD`, and start the team explicitly. Configure the reader's room and role for
+the scenario being checked, then run the simulator again to produce a fresh tap.
+A start role can start a pending team; a finish role can finish an active team.
+The simulator does not create rooms, teams or reader settings automatically.
 
-1. Run `node scripts/simulate-upc.js http://127.0.0.1:14000` once to register the simulator.
-2. Open `http://127.0.0.1:14000`, create a room assigned to `SIMULATOR00001` and leave it enabled.
-3. Create a team session and assign card `12AB34CD`.
-4. Run `node scripts/simulate-upc.js http://127.0.0.1:14000 --win`.
-5. In **Round tracking**, expect one accepted registration and one **Win reported**.
-   The repeated win packet must not add a second round or result.
-
-The `--win` option adds activity, win, repeated win and return-to-armed snapshots.
-It does not create rooms or sessions automatically.
-
-## Tracking real rounds
-
-Create a room, select its discovered UUPC and enable it. Assign the team's card in
-Reception. While the controller reports **Armed**, remove and place that card on
-the room's reader. The **Round tracking** section shows the team, room and elapsed
-time since registration. **Recent scan decisions** explains cards rejected because
-the room or team is already tracked, the session is inactive or the controller is
-not armed. Removing a card does not end its tracked round.
-
-Run the physical puzzle through its existing controls. The panel records later
-controller activity and **Win reported**; tapping a card does not operate the
-door or start the game. **Reset observed** is not an automatic loss. **Needs review**
-means tracking could not be continued confidently, for example after restarting
-the server or losing controller contact. No points are awarded.
-
-**Close tracking** releases the software assignment only. Check and reset the
-physical room through its existing controls before admitting another team. Register
-the next round with a new placement while the controller is armed. Finishing a team
-session also closes its tracking. Saved names and outcomes remain in history.
-
+The `--win` option adds puzzle activity, win, repeated win and return-to-armed
+snapshots. These machine-state changes do not replace a configured finish reader
+or the operator's finish action.
 ## Connecting real UUPC devices
 
 Stop the demo server, then start the receiver in PowerShell with:
@@ -113,4 +146,9 @@ Enable UDP discovery through the server configuration. The computer and UUPC dev
 
 Do not run ERCC alongside this application on the same device network. The firmware retains the first discovered ERCC server address until the UUPC restarts. Switching servers may require a controller restart; restarting only the application will not change the retained address.
 
-HTTP is the permanent transport; UDP is used for discovery. A snapshot contains the last RFID state rather than a complete event log. Duplicates are filtered, but rapid changes between snapshots, restarts or network interruptions may prevent recovery of every placement. Controller wins, including externally forced wins, are observations rather than verified scores. The application does not control round starts or physical access.
+HTTP is the permanent transport and UDP is used for discovery. Firmware snapshots
+contain the last RFID state rather than a durable event log. Repeated snapshots
+are filtered, but restarts, lost callbacks or rapid transitions may leave gaps in
+history. UDP heartbeats do not prove that every HTTP event arrived. The system
+records received visits and elapsed game time; it does not verify physical access
+or operate puzzle starts, resets or locks.

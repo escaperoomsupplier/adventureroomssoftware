@@ -13,11 +13,18 @@ const help = node('p', 'Select a room or reader to inspect it. Colours show read
 const toolbar = node('div', undefined, 'vm-toolbar');
 const button = (text, action) => { const b = node('button', text); b.type = 'button'; b.addEventListener('click', action); return b; };
 const lockButton = button('Unlock editing', () => { if (gesture) cancelGesture(); locked = !locked; if (locked) fit(); syncControls(); draw(true); });
+lockButton.className = 'vm-lock';
+const lockIcon = svgNode('svg', { viewBox: '0 0 24 24', width: 19, height: 19, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'aria-hidden': 'true' });
+const lockShackle = svgNode('path');
+lockIcon.append(lockShackle, svgNode('rect', { x: 5, y: 10, width: 14, height: 11, rx: 2 }), svgNode('path', { d: 'M12 14v3' }));
+const lockLabel = node('span');
+lockButton.replaceChildren(lockIcon, lockLabel);
+const header = node('div', undefined, 'vm-header'); header.append(title, lockButton);
 const fitButton = button('Fit rooms', () => { fit(); draw(true); });
 const minus = button('−', () => zoom(1.25)); minus.setAttribute('aria-label', 'Zoom out');
 const plus = button('+', () => zoom(0.8)); plus.setAttribute('aria-label', 'Zoom in');
 const add = button('Add room', () => select('new', null));
-toolbar.append(lockButton, minus, plus, fitButton, add);
+toolbar.append(minus, plus, fitButton, add);
 const status = node('span', '', 'vm-status'); status.setAttribute('role', 'status'); toolbar.append(status);
 const error = node('p', '', 'vm-error'); error.setAttribute('role', 'alert'); error.hidden = true;
 const layout = node('div', undefined, 'vm-layout');
@@ -26,7 +33,7 @@ const sidebar = node('aside', undefined, 'vm-sidebar'); sidebar.append(node('h3'
 const readerList = node('div', undefined, 'vm-reader-list'); sidebar.append(readerList);
 layout.append(canvas, sidebar);
 const inspector = node('section', undefined, 'vm-inspector'); inspector.setAttribute('aria-label', 'Selected item details');
-shell.append(title, help, toolbar, error, layout, inspector); mount.append(shell);
+shell.append(header, help, toolbar, error, layout, inspector); mount.append(shell);
 
 function fit() {
   if (!rooms.length) { view = { x: 0, y: 0, w: 1000, h: 600 }; return; }
@@ -40,7 +47,11 @@ function zoom(factor) {
   view = { x: view.x + (view.w - w) / 2, y: view.y + (view.h - h) / 2, w, h }; draw(true);
 }
 function syncControls() {
-  lockButton.textContent = locked ? 'Unlock editing' : 'Lock map'; lockButton.setAttribute('aria-pressed', String(locked));
+  lockLabel.textContent = locked ? 'Locked' : 'Unlocked';
+  lockShackle.setAttribute('d', locked ? 'M8 10V7a4 4 0 0 1 8 0v3' : 'M8 10V7a4 4 0 0 1 7.5-2');
+  lockButton.setAttribute('aria-label', locked ? 'Map locked. Unlock editing' : 'Map unlocked. Lock map and fit all rooms');
+  lockButton.title = locked ? 'Unlock editing' : 'Lock map and fit all rooms';
+  lockButton.setAttribute('aria-pressed', String(locked));
   minus.disabled = plus.disabled = add.disabled = !canEdit();
   status.textContent = !connected ? 'Live connection unavailable — editing disabled' : pending ? 'Saving…' : locked ? 'Locked · automatically fitted' : 'Editing · drag rooms, handles or readers; drag empty space to pan';
   for (const control of inspector.querySelectorAll('input,select,button')) control.disabled = !canEdit();
@@ -66,7 +77,7 @@ function draw(force = false) {
     const room = gesture?.kind === 'room' && gesture.id === original.id ? { ...original, ...gesture.preview } : original;
     const g = svgNode('g', { class: `vm-room vm-${contact(room)}${selected?.type === 'room' && selected.id === room.id ? ' vm-selected' : ''}`, tabindex: '0', role: 'button', 'aria-label': `${room.name}, ${contact(room) === 'online' ? 'all assigned readers recently seen' : contact(room) === 'offline' ? 'reader contact missing' : 'no contact status'}`, 'data-key': `room:${room.id}` });
     g.append(svgNode('rect', { x: room.x, y: room.y, width: room.width, height: room.height, rx: 10 }));
-    const text = svgNode('text', { x: room.x + 16, y: room.y + 29 }); text.textContent = room.name; g.append(text);
+    const text = svgNode('text', { x: room.x + 4, y: room.y - 12 }); text.textContent = room.name; g.append(text);
     g.addEventListener('click', () => { if (!gesture) select('room', room.id); });
     g.addEventListener('keydown', e => keyActivate(e, () => select('room', room.id)));
     g.addEventListener('pointerdown', e => begin(e, 'room', original)); canvas.append(g);
@@ -174,7 +185,7 @@ canvas.addEventListener('pointermove', e => {
   if (Math.abs(dx) + Math.abs(dy) > 3) g.moved = true;
   if (g.kind === 'pan') { view.x -= dx; view.y -= dy; }
   else if (g.kind === 'room') {
-    g.preview = g.resize ? { width: clamp(snap(g.original.width + dx), 120, Math.min(2000, 10000 - g.original.x)), height: clamp(snap(g.original.height + dy), 80, Math.min(2000, 10000 - g.original.y)) } : { x: clamp(snap(g.original.x + dx), 0, 10000 - g.original.width), y: clamp(snap(g.original.y + dy), 0, 10000 - g.original.height) };
+    g.preview = g.resize ? { width: clamp(snap(g.original.width + dx), 120, 2000), height: clamp(snap(g.original.height + dy), 80, 2000) } : { x: clamp(snap(g.original.x + dx), 0, 10000), y: clamp(snap(g.original.y + dy), 0, 10000) };
   } else { const room = rooms.find(r => r.id === g.original.roomId); if (room) g.preview = { x: clamp(snap(g.original.x + dx), 0, room.width), y: clamp(snap(g.original.y + dy), 0, room.height) }; }
   draw(true);
 });
