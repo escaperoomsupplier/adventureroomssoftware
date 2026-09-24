@@ -17,6 +17,11 @@ export class VenueStore {
       CREATE INDEX IF NOT EXISTS team_visits_session ON team_visits(session_id);
       CREATE TEMP TABLE IF NOT EXISTS venue_observed_devices(device_id TEXT PRIMARY KEY);
       DELETE FROM venue_observed_devices;`);
+    const columns = new Set(db.prepare('PRAGMA table_info(team_visits)').all().map(c => c.name));
+    if (!columns.has('exited_at')) db.exec('ALTER TABLE team_visits ADD COLUMN exited_at INTEGER');
+    if (!columns.has('exit_reason')) db.exec('ALTER TABLE team_visits ADD COLUMN exit_reason TEXT');
+    db.exec(`CREATE TABLE IF NOT EXISTS venue_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,
+      type TEXT NOT NULL,session_id TEXT NOT NULL,room_id TEXT NOT NULL,occurred_at INTEGER NOT NULL,source TEXT NOT NULL);`);
     this.#atomic(() => {
       if (!db.prepare("SELECT name FROM venue_migrations WHERE name='legacy_rooms'").get()) {
         db.exec(`INSERT OR IGNORE INTO reader_settings(device_id,name,configured,room_id,x,y,role)
@@ -46,7 +51,7 @@ export class VenueStore {
       const values = { ...reader, ...input };
       if (typeof values.name !== 'string' || !values.name.trim() || values.name.trim().length > 80) fail(400, 'Reader name must contain 1 to 80 characters.');
       if (typeof values.configured !== 'boolean') fail(400, 'Configured must be a boolean.');
-      if (!['entry', 'start', 'finish'].includes(values.role)) fail(400, 'Invalid reader role.');
+      if (!['entry', 'start', 'finish', 'exit'].includes(values.role)) fail(400, 'Invalid reader role.');
       for (const key of ['x', 'y']) if (!Number.isInteger(values[key]) || values[key] < 0 || values[key] > 10000) fail(400, `Invalid reader ${key}.`);
       let room = null;
       if (values.roomId !== null) {
@@ -75,7 +80,7 @@ export class VenueStore {
       const reader = this.db.prepare('SELECT * FROM reader_settings WHERE device_id=? AND configured=1').get(device.id);
       if (!reader) return changed;
       const room = reader.room_id ? this.db.prepare('SELECT * FROM rooms WHERE id=?').get(reader.room_id) : null;
-      if (reader.room_id && (!room || !room.enabled)) return changed;
+      if (reader.room_id && !room) return changed;
       const binding = this.db.prepare('SELECT session_id FROM reception_bindings WHERE uid=? AND released_at IS NULL').get(event.uid);
       if (!binding) return changed;
       let session = this.reception.getSession(binding.session_id);
@@ -84,10 +89,21 @@ export class VenueStore {
         changed = true;
       }
       if (session.status !== 'active') return changed;
+      if (reader.role === 'exit') {
+        if (room && session.currentRoomId === room.id) {
+          this.#exitVisit(session.id, room.id, 'reader_exit');
+          this.db.prepare('UPDATE reception_sessions SET current_room_id=NULL,current_room_name=NULL WHERE id=?').run(session.id);
+          this.#event('room.exited', session.id, room.id, 'reader');
+          return true;
+        }
+        return changed;
+      }
       if (room && session.currentRoomId !== room.id) {
+        if (session.currentRoomId) this.#exitVisit(session.id, session.currentRoomId, 'next_room');
         this.db.prepare(`INSERT INTO team_visits(id,session_id,room_id,room_name,reader_id,reader_name,entered_at)
           VALUES(?,?,?,?,?,?,?)`).run(randomUUID(), session.id, room.id, room.name, device.id, reader.name, this.now());
         this.db.prepare('UPDATE reception_sessions SET current_room_id=?,current_room_name=? WHERE id=?').run(room.id, room.name, session.id);
+        this.#event('room.entered', session.id, room.id, 'reader');
         changed = true;
       }
       if (reader.role === 'finish') {
@@ -120,8 +136,25 @@ export class VenueStore {
   getHistory(sessionId) {
     this.reception.getSession(sessionId);
     return this.db.prepare(`SELECT id,room_id AS roomId,room_name AS roomName,reader_id AS readerId,
-      reader_name AS readerName,entered_at AS enteredAt FROM team_visits WHERE session_id=? ORDER BY entered_at,rowid`).all(sessionId)
-      .map(row => ({ ...row, enteredAt: new Date(row.enteredAt).toISOString() }));
+      reader_name AS readerName,entered_at AS enteredAt,exited_at AS exitedAt,exit_reason AS exitReason FROM team_visits WHERE session_id=? ORDER BY entered_at,rowid`).all(sessionId)
+      .map(row => ({ ...row, enteredAt: new Date(row.enteredAt).toISOString(), exitedAt: row.exitedAt === null ? null : new Date(row.exitedAt).toISOString() }));
+  }
+
+  listDomainEvents(afterSequence = 0) {
+    if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) fail(400, 'Invalid event cursor.');
+    return this.db.prepare(`SELECT id,sequence,type,session_id AS sessionId,room_id AS roomId,occurred_at AS occurredAt,source
+      FROM venue_events WHERE sequence>? ORDER BY sequence`).all(afterSequence)
+      .map(row => ({ ...row, occurredAt: new Date(row.occurredAt).toISOString() }));
+  }
+
+  #exitVisit(sessionId, roomId, reason) {
+    this.db.prepare('UPDATE team_visits SET exited_at=?,exit_reason=? WHERE session_id=? AND room_id=? AND exited_at IS NULL')
+      .run(this.now(), reason, sessionId, roomId);
+  }
+
+  #event(type, sessionId, roomId, source) {
+    this.db.prepare('INSERT INTO venue_events(id,type,session_id,room_id,occurred_at,source) VALUES(?,?,?,?,?,?)')
+      .run(randomUUID(), type, sessionId, roomId, this.now(), source);
   }
 
   listLeaderboard() {
