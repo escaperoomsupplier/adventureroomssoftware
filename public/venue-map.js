@@ -2,220 +2,275 @@ const mount = document.getElementById('venue-map');
 const NS = 'http://www.w3.org/2000/svg';
 const node = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
 const svgNode = (tag, attrs = {}) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
-let rooms = [], readers = [], connected = false, locked = true, pending = false, selected = null, gesture = null;
-let view = { x: 0, y: 0, w: 1000, h: 600 }, signature = '', listSignature = '';
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-const snap = v => Math.round(v / 20) * 20;
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+const snap = value => Math.round(value / 20) * 20;
+const roles = { start: 'Start time', finish: 'Stop time', entry: 'Entry Room', exit: 'Exit Room' };
+let rooms = [], readers = [], screens = [], sessions = [], connected = false, locked = true, pending = false;
+let selected = null, gesture = null, signature = '', listSignature = '', flashTimer, suppressClick = false;
+let view = { x: 500, y: 700, w: 1000, h: 600 };
 const canEdit = () => !locked && connected && !pending;
-const shell = node('section', undefined, 'vm-shell');
-const title = node('h2', 'Venue map');
-const help = node('p', 'Select a room or reader to inspect it. Colours show reader contact, not occupancy.', 'vm-help');
-const toolbar = node('div', undefined, 'vm-toolbar');
+const collection = type => type === 'room' ? rooms : type === 'reader' ? readers : screens;
+const itemFor = (type, id) => collection(type).find(item => item.id === id);
 const button = (text, action) => { const b = node('button', text); b.type = 'button'; b.addEventListener('click', action); return b; };
-const lockButton = button('Unlock editing', () => { if (gesture) cancelGesture(); locked = !locked; if (locked) fit(); syncControls(); draw(true); });
+const shell = node('section', undefined, 'vm-shell');
+const header = node('div', undefined, 'vm-header');
+const lockButton = button('', () => { cancelGesture(); locked = !locked; if (locked) fit(); syncControls(); draw(true); });
 lockButton.className = 'vm-lock';
 const lockIcon = svgNode('svg', { viewBox: '0 0 24 24', width: 19, height: 19, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'aria-hidden': 'true' });
-const lockShackle = svgNode('path');
-lockIcon.append(lockShackle, svgNode('rect', { x: 5, y: 10, width: 14, height: 11, rx: 2 }), svgNode('path', { d: 'M12 14v3' }));
-const lockLabel = node('span');
-lockButton.replaceChildren(lockIcon, lockLabel);
-const header = node('div', undefined, 'vm-header'); header.append(title, lockButton);
-const fitButton = button('Fit rooms', () => { fit(); draw(true); });
-const minus = button('−', () => zoom(1.25)); minus.setAttribute('aria-label', 'Zoom out');
-const plus = button('+', () => zoom(0.8)); plus.setAttribute('aria-label', 'Zoom in');
-const add = button('Add room', () => select('new', null));
-toolbar.append(minus, plus, fitButton, add);
-const status = node('span', '', 'vm-status'); status.setAttribute('role', 'status'); toolbar.append(status);
+const lockPath = svgNode('path'); lockIcon.append(lockPath, svgNode('rect', { x: 5, y: 10, width: 14, height: 11, rx: 2 }));
+const lockLabel = node('span'); lockButton.append(lockIcon, lockLabel); header.append(node('h2', 'Venue map'), lockButton);
+const toolbar = node('div', undefined, 'vm-toolbar');
+const fitButton = button('Fit view', () => { fit(); draw(true); });
+const addRoom = button('Add room', () => { if (locked) return flashLock(); select('room', null); });
+const addScreen = button('Add screen', () => { if (locked) return flashLock(); select('screen', null); });
+const status = node('span', '', 'vm-status'); status.setAttribute('role', 'status'); toolbar.append(fitButton, addRoom, addScreen, status);
 const error = node('p', '', 'vm-error'); error.setAttribute('role', 'alert'); error.hidden = true;
 const layout = node('div', undefined, 'vm-layout');
-const canvas = svgNode('svg', { class: 'vm-canvas', tabindex: '0', 'aria-label': 'Venue map. Select rooms and readers; use the details form to change positions.' });
+const canvas = svgNode('svg', { class: 'vm-canvas', tabindex: '0', 'aria-label': 'Venue map. Tab to select items. Arrow keys move selected items; Shift and arrows resize rooms.' });
 const sidebar = node('aside', undefined, 'vm-sidebar'); sidebar.append(node('h3', 'Readers'));
 const readerList = node('div', undefined, 'vm-reader-list'); sidebar.append(readerList);
-layout.append(canvas, sidebar);
 const inspector = node('section', undefined, 'vm-inspector'); inspector.setAttribute('aria-label', 'Selected item details');
-shell.append(header, help, toolbar, error, layout, inspector); mount.append(shell);
+layout.append(canvas, sidebar); shell.append(header, toolbar, error, layout, inspector); mount.append(shell);
 
-function fit() {
-  if (!rooms.length) { view = { x: 0, y: 0, w: 1000, h: 600 }; return; }
-  const x = Math.min(...rooms.map(r => r.x)), y = Math.min(...rooms.map(r => r.y));
-  const right = Math.max(...rooms.map(r => r.x + r.width)), bottom = Math.max(...rooms.map(r => r.y + r.height));
-  view = { x: x - 70, y: y - 70, w: Math.max(400, right - x + 140), h: Math.max(260, bottom - y + 140) };
-}
-function zoom(factor) {
-  if (!canEdit() || gesture) return;
-  const w = clamp(view.w * factor, 240, 14000), h = view.h * w / view.w;
-  view = { x: view.x + (view.w - w) / 2, y: view.y + (view.h - h) / 2, w, h }; draw(true);
+function flashLock() {
+  clearTimeout(flashTimer); lockButton.classList.remove('vm-flash');
+  void lockButton.offsetWidth; lockButton.classList.add('vm-flash');
+  flashTimer = setTimeout(() => lockButton.classList.remove('vm-flash'), 850);
 }
 function syncControls() {
   lockLabel.textContent = locked ? 'Locked' : 'Unlocked';
-  lockShackle.setAttribute('d', locked ? 'M8 10V7a4 4 0 0 1 8 0v3' : 'M8 10V7a4 4 0 0 1 7.5-2');
-  lockButton.setAttribute('aria-label', locked ? 'Map locked. Unlock editing' : 'Map unlocked. Lock map and fit all rooms');
-  lockButton.title = locked ? 'Unlock editing' : 'Lock map and fit all rooms';
+  lockPath.setAttribute('d', locked ? 'M8 10V7a4 4 0 0 1 8 0v3' : 'M8 10V7a4 4 0 0 1 7.5-2');
   lockButton.setAttribute('aria-pressed', String(locked));
-  minus.disabled = plus.disabled = add.disabled = !canEdit();
-  status.textContent = !connected ? 'Live connection unavailable — editing disabled' : pending ? 'Saving…' : locked ? 'Locked · automatically fitted' : 'Editing · drag rooms, handles or readers; drag empty space to pan';
-  for (const control of inspector.querySelectorAll('input,select,button')) control.disabled = !canEdit();
-  for (const item of readerList.querySelectorAll('button')) item.draggable = canEdit();
+  lockButton.setAttribute('aria-label', locked ? 'Unlock map editing' : 'Lock map and fit all rooms');
+  status.textContent = !connected ? 'Disconnected' : pending ? 'Saving…' : '';
+  addRoom.disabled = addScreen.disabled = !connected || pending;
+  for (const control of inspector.querySelectorAll('input,select,button[data-save]')) {
+    control.disabled = !connected || pending;
+    control.setAttribute('aria-disabled', String(!canEdit()));
+    if (control.tagName === 'INPUT') control.readOnly = locked;
+  }
+  for (const b of readerList.querySelectorAll('button')) b.draggable = canEdit();
+}
+inspector.addEventListener('pointerdown', e => {
+  if (locked && e.target.closest('input,select,button[data-save]')) { e.preventDefault(); flashLock(); }
+}, true);
+inspector.addEventListener('click', e => {
+  if (locked && e.target.closest('input,select,button[data-save]')) { e.preventDefault(); flashLock(); }
+}, true);
+inspector.addEventListener('keydown', e => {
+  if (locked && e.target.closest('input,select,button[data-save]') && !['Tab','Shift'].includes(e.key)) { e.preventDefault(); flashLock(); }
+}, true);
+function worldPosition(item) {
+  const room = rooms.find(r => r.id === item.roomId);
+  return { x: (room?.x || 0) + item.x, y: (room?.y || 0) + item.y };
+}
+function fit() {
+  const extents = rooms.map(r => ({ x: r.x, y: r.y, w: r.width, h: r.height }));
+  for (const s of screens.filter(s => !s.roomId)) { const p = worldPosition(s); extents.push({ ...p, w: 120, h: 52 }); }
+  if (!extents.length) { view = { x: 500, y: 700, w: 1000, h: 600 }; return; }
+  const x = Math.min(...extents.map(e => e.x)), y = Math.min(...extents.map(e => e.y));
+  const right = Math.max(...extents.map(e => e.x + e.w)), bottom = Math.max(...extents.map(e => e.y + e.h));
+  view = { x: x - 70, y: y - 70, w: Math.max(400, right - x + 140), h: Math.max(260, bottom - y + 140) };
 }
 function contact(room) {
   const assigned = readers.filter(r => r.configured && r.roomId === room.id);
-  if (!room.enabled || !assigned.length) return 'none';
-  return assigned.every(r => Number.isFinite(Date.parse(r.lastSeenAt)) && Date.now() - Date.parse(r.lastSeenAt) <= 25000) ? 'online' : 'offline';
+  return !room.enabled || !assigned.length ? 'none' : assigned.every(r => Number.isFinite(Date.parse(r.lastSeenAt)) && Date.now() - Date.parse(r.lastSeenAt) <= 25000) ? 'online' : 'offline';
 }
-function keyActivate(e, action) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action(); } }
+function clearSelection() { selected = null; inspector.replaceChildren(); draw(true); }
+function accessible(g, type, id, label) {
+  g.setAttribute('tabindex', '0'); g.setAttribute('role', 'button'); g.setAttribute('aria-label', label); g.dataset.key = `${type}:${id}`;
+  g.addEventListener('click', e => { e.stopPropagation(); if (!suppressClick && !gesture) select(type, id); });
+  g.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(type, id); return; }
+    if (!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) return;
+    e.preventDefault(); if (!canEdit()) { if (locked) flashLock(); return; }
+    const item = itemFor(type, id); if (!item) return;
+    const dx = e.key === 'ArrowLeft' ? -20 : e.key === 'ArrowRight' ? 20 : 0;
+    const dy = e.key === 'ArrowUp' ? -20 : e.key === 'ArrowDown' ? 20 : 0;
+    let patch;
+    if (type === 'room') patch = e.shiftKey ? { width: clamp(item.width + dx, 120, 2000), height: clamp(item.height + dy, 80, 2000) } : { x: clamp(item.x + dx, -10000, 10000), y: clamp(item.y + dy, -10000, 10000) };
+    else { const room = rooms.find(r => r.id === item.roomId); patch = { x: clamp(item.x + dx, room ? 0 : -10000, room ? Math.max(0,room.width-116) : 10000), y: clamp(item.y + dy, room ? 0 : -10000, room ? Math.max(0,room.height-42) : 10000) }; }
+    void persist(type, id, patch);
+  });
+}
 function draw(force = false) {
   if (gesture && !force) return;
-  const next = JSON.stringify([rooms, readers.map(r => [r.id, r.name, r.configured, r.roomId, r.x, r.y]), rooms.map(contact), selected, locked, view]);
-  if (!force && next === signature) return;
-  signature = next;
+  const next = JSON.stringify([rooms, readers.map(r => [r.id,r.name,r.configured,r.roomId,r.x,r.y,r.role]), screens.map(s => [s.id,s.name,s.roomId,s.x,s.y]), sessions.map(s => [s.id,s.teamName,s.status,s.currentRoomId]), rooms.map(contact), selected, locked, view]);
+  if (!force && signature === next) return; signature = next;
   const focusKey = canvas.contains(document.activeElement) ? document.activeElement.dataset.key : null;
   canvas.replaceChildren(); canvas.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
   const defs = svgNode('defs'), pattern = svgNode('pattern', { id: 'vm-grid', width: 20, height: 20, patternUnits: 'userSpaceOnUse' });
-  pattern.append(svgNode('path', { d: 'M 20 0 L 0 0 0 20', fill: 'none', stroke: '#dce5e9', 'stroke-width': 0.6 })); defs.append(pattern); canvas.append(defs);
+  pattern.append(svgNode('path', { d: 'M20 0H0V20', fill: 'none', stroke: '#dce5e9', 'stroke-width': 0.6 })); defs.append(pattern); canvas.append(defs);
   canvas.append(svgNode('rect', { x: view.x, y: view.y, width: view.w, height: view.h, fill: 'url(#vm-grid)', 'data-pan': 'true' }));
-  for (const original of rooms) {
-    const room = gesture?.kind === 'room' && gesture.id === original.id ? { ...original, ...gesture.preview } : original;
-    const g = svgNode('g', { class: `vm-room vm-${contact(room)}${selected?.type === 'room' && selected.id === room.id ? ' vm-selected' : ''}`, tabindex: '0', role: 'button', 'aria-label': `${room.name}, ${contact(room) === 'online' ? 'all assigned readers recently seen' : contact(room) === 'offline' ? 'reader contact missing' : 'no contact status'}`, 'data-key': `room:${room.id}` });
+  const displayRooms = rooms.map(r => gesture?.kind === 'room' && gesture.id === r.id ? { ...r, ...gesture.preview } : r);
+  for (const room of displayRooms) {
+    const g = svgNode('g', { class: `vm-room vm-${contact(room)}${selected?.type === 'room' && selected.id === room.id ? ' vm-selected' : ''}` });
+    accessible(g, 'room', room.id, `${room.name}, ${contact(room) === 'online' ? 'readers recently seen' : contact(room) === 'offline' ? 'reader contact missing' : 'no contact status'}`);
     g.append(svgNode('rect', { x: room.x, y: room.y, width: room.width, height: room.height, rx: 10 }));
-    const text = svgNode('text', { x: room.x + 4, y: room.y - 12 }); text.textContent = room.name; g.append(text);
-    g.addEventListener('click', () => { if (!gesture) select('room', room.id); });
-    g.addEventListener('keydown', e => keyActivate(e, () => select('room', room.id)));
-    g.addEventListener('pointerdown', e => begin(e, 'room', original)); canvas.append(g);
-    if (!locked) {
-      const handle = svgNode('rect', { x: room.x + room.width - 15, y: room.y + room.height - 15, width: 15, height: 15, class: 'vm-handle', 'aria-label': `Resize ${room.name}` });
-      handle.addEventListener('pointerdown', e => begin(e, 'room', original, true)); canvas.append(handle);
+    const name = svgNode('text', { x: room.x + room.width / 2, y: room.y + room.height / 2, 'text-anchor': 'middle', class: 'vm-room-name' }); name.textContent = room.name; g.append(name);
+    g.addEventListener('pointerdown', e => begin(e, 'room', itemFor('room', room.id))); canvas.append(g);
+    if (!locked) for (const edge of ['left','right','top','bottom']) {
+      const vertical = edge === 'left' || edge === 'right';
+      const hit = svgNode('line', { x1: edge === 'right' ? room.x + room.width : room.x, y1: edge === 'bottom' ? room.y + room.height : room.y, x2: vertical ? (edge === 'right' ? room.x + room.width : room.x) : room.x + room.width, y2: vertical ? room.y + room.height : (edge === 'bottom' ? room.y + room.height : room.y), class: `vm-edge vm-edge-${vertical ? 'vertical' : 'horizontal'}` });
+      hit.addEventListener('pointerdown', e => begin(e, 'room', itemFor('room', room.id), edge)); canvas.append(hit);
     }
-    for (const originalReader of readers.filter(r => r.configured && r.roomId === room.id)) {
-      const reader = gesture?.kind === 'reader' && gesture.id === originalReader.id ? { ...originalReader, ...gesture.preview } : originalReader;
-      const rg = svgNode('g', { class: `vm-reader${selected?.type === 'reader' && selected.id === reader.id ? ' vm-selected' : ''}`, tabindex: '0', role: 'button', 'aria-label': `Reader ${reader.name || reader.id}`, 'data-key': `reader:${reader.id}` });
-      rg.append(svgNode('circle', { cx: room.x + reader.x, cy: room.y + reader.y, r: 10 }));
-      const label = svgNode('text', { x: room.x + reader.x + 15, y: room.y + reader.y + 5 }); label.textContent = reader.name || reader.id; rg.append(label);
-      rg.addEventListener('click', () => { if (!gesture) select('reader', reader.id); });
-      rg.addEventListener('keydown', e => keyActivate(e, () => select('reader', reader.id)));
-      rg.addEventListener('pointerdown', e => begin(e, 'reader', originalReader)); canvas.append(rg);
-    }
+    const teams = sessions.filter(s => s.status === 'active' && s.currentRoomId === room.id);
+    teams.forEach((team, index) => {
+      const row = svgNode('g', { class: 'vm-team' }), x = room.x + 13, y = room.y + room.height - 16 - index * 19;
+      row.append(svgNode('circle', { cx: x, cy: y - 4, r: 4 }));
+      const text = svgNode('text', { x: x + 10, y }); text.textContent = team.teamName; row.append(text);
+      const title = svgNode('title'); title.textContent = `${team.teamName} — last recorded room`; row.append(title); canvas.append(row);
+    });
   }
-  if (!rooms.length) { const text = svgNode('text', { x: view.x + 45, y: view.y + 80, class: 'vm-empty' }); text.textContent = 'Your venue starts here. Unlock editing and add a room.'; canvas.append(text); }
+  for (const type of ['reader','screen']) for (const original of collection(type)) {
+    if (type === 'reader' && (!original.configured || !original.roomId)) continue;
+    const item = gesture?.kind === type && gesture.id === original.id ? { ...original, ...gesture.preview } : original;
+    const room = displayRooms.find(r => r.id === item.roomId); if (item.roomId && !room) continue;
+    const x = (room?.x || 0) + (room ? clamp(item.x,0,Math.max(0,room.width-116)) : item.x), y = (room?.y || 0) + (room ? clamp(item.y,0,Math.max(0,room.height-42)) : item.y);
+    const g = svgNode('g', { class: `vm-block vm-${type}${selected?.type === type && selected.id === item.id ? ' vm-selected' : ''}` });
+    accessible(g, type, item.id, `${type === 'screen' ? 'Screen' : 'Reader'} ${item.name || item.id}`);
+    g.append(svgNode('rect', { x, y, width: 116, height: 42, rx: 6 }));
+    const text = svgNode('text', { x: x + 9, y: y + 17 }); text.textContent = (item.name || item.id).slice(0, 16); g.append(text);
+    const label = svgNode('text', { x: x + 9, y: y + 32, class: 'vm-block-sub' }); label.textContent = type === 'screen' ? 'Screen' : roles[item.role] || 'Reader'; g.append(label);
+    const title = svgNode('title'); title.textContent = item.name || item.id; g.append(title);
+    g.addEventListener('pointerdown', e => begin(e, type, original)); canvas.append(g);
+  }
   if (focusKey) [...canvas.querySelectorAll('[data-key]')].find(e => e.dataset.key === focusKey)?.focus({ preventScroll: true });
 }
 function listReaders() {
-  const next = JSON.stringify(readers.map(r => [r.id, r.name, r.configured, r.roomId]));
-  if (next === listSignature) return; listSignature = next;
-  const focused = document.activeElement?.dataset.readerId;
-  readerList.replaceChildren();
+  const next = JSON.stringify(readers.map(r => [r.id,r.name,r.configured,r.roomId])); if (next === listSignature) return; listSignature = next;
+  const focused = document.activeElement?.dataset.readerId; readerList.replaceChildren();
   for (const reader of readers) {
-    const b = button(`${reader.name || reader.id}${reader.configured ? '' : ' · discovered'}`, () => select('reader', reader.id));
-    b.dataset.readerId = reader.id; b.draggable = canEdit();
-    b.addEventListener('dragstart', e => { if (!canEdit()) { e.preventDefault(); return; } e.dataTransfer.setData('application/x-venue-reader', reader.id); e.dataTransfer.effectAllowed = 'move'; });
-    readerList.append(b);
+    const b = button(reader.name || reader.id, () => select('reader', reader.id)); b.dataset.readerId = reader.id; b.draggable = canEdit();
+    b.addEventListener('dragstart', e => { if (!canEdit()) { e.preventDefault(); if (locked) flashLock(); return; } e.dataTransfer.setData('application/x-venue-reader', reader.id); e.dataTransfer.effectAllowed = 'move'; }); readerList.append(b);
   }
-  if (!readers.length) readerList.append(node('p', 'Readers appear here when discovered on the local network.', 'vm-help'));
+  if (!readers.length) readerList.append(node('p', 'No readers discovered.', 'vm-help'));
   if (focused) [...readerList.querySelectorAll('button')].find(b => b.dataset.readerId === focused)?.focus({ preventScroll: true });
 }
-function field(form, label, value, { type = 'text', min, max, options } = {}) {
-  const wrapper = node('label', label), input = node(options ? 'select' : 'input');
-  if (options) for (const [v, text] of options) input.append(new Option(text, v));
-  else { input.type = type; if (min !== undefined) input.min = min; if (max !== undefined) input.max = max; if (type === 'number') input.step = 1; }
-  if (type === 'checkbox') input.checked = Boolean(value); else input.value = value ?? '';
-  wrapper.append(input); form.append(wrapper); return input;
+function field(form, title, value, choices) {
+  const wrapper = node('label', title), input = node(choices ? 'select' : 'input');
+  if (choices) for (const [id, text] of choices) input.append(new Option(text, id));
+  else { input.type = 'text'; input.maxLength = 80; input.required = true; }
+  input.value = value ?? ''; wrapper.append(input); form.append(wrapper); return input;
+}
+function refreshAssigned() {
+  const target = inspector.querySelector('[data-assigned-room]'); if (!target) return;
+  const items = ['reader','screen'].flatMap(type => collection(type).filter(item => item.roomId === target.dataset.assignedRoom && (type !== 'reader' || item.configured)).map(item => ({type,item})));
+  const next = JSON.stringify(items.map(({type,item}) => [type,item.id,item.name]));
+  if (target.dataset.signature === next) return; target.dataset.signature = next; target.replaceChildren();
+  for (const {type,item} of items) target.append(button(`${type === 'reader' ? 'Reader' : 'Screen'}: ${item.name || item.id}`, () => select(type,item.id)));
+  if (!items.length) target.append(node('p','No readers or screens assigned.','vm-help'));
 }
 function select(type, id) {
   selected = { type, id }; inspector.replaceChildren();
-  const current = type === 'room' ? rooms.find(r => r.id === id) : readers.find(r => r.id === id);
-  if (type !== 'new' && !current) { inspector.append(node('p', 'This item is no longer available.')); draw(true); return; }
-  inspector.append(node('h3', type === 'new' ? 'Add room' : type === 'room' ? `Room: ${current.name}` : `Reader: ${current.name || current.id}`));
+  const current = id ? itemFor(type, id) : null; if (id && !current) { clearSelection(); return; }
+  inspector.append(node('h3', id ? current.name || current.id : `Add ${type}`));
   const form = node('form', undefined, 'vm-form');
-  const name = field(form, 'Name', current?.name || (type === 'reader' ? current.id : '')); name.required = true; name.maxLength = 80;
+  const name = field(form, 'Name', current?.name || (type === 'reader' ? id : ''));
   let data;
-  if (type === 'room' || type === 'new') {
-    const enabled = field(form, 'Enabled', current?.enabled ?? true, { type: 'checkbox' });
-    const x = field(form, 'X', current?.x ?? 100, { type: 'number', min: 0, max: 10000 });
-    const y = field(form, 'Y', current?.y ?? 100, { type: 'number', min: 0, max: 10000 });
-    const width = field(form, 'Width', current?.width ?? 320, { type: 'number', min: 120, max: 2000 });
-    const height = field(form, 'Height', current?.height ?? 220, { type: 'number', min: 80, max: 2000 });
-    data = () => ({ name: name.value.trim(), enabled: enabled.checked, x: Number(x.value), y: Number(y.value), width: Number(width.value), height: Number(height.value) });
-  } else {
-    const room = field(form, 'Assigned room', current.roomId || '', { options: [['', 'Unassigned'], ...rooms.map(r => [r.id, r.name])] });
-    const role = field(form, 'Role', current.role || 'entry', { options: [['entry', 'Entry'], ['start', 'Start'], ['finish', 'Finish']] });
-    const x = field(form, 'X inside room', current.x ?? 20, { type: 'number', min: 0, max: 2000 });
-    const y = field(form, 'Y inside room', current.y ?? 20, { type: 'number', min: 0, max: 2000 });
-    data = () => ({ name: name.value.trim(), configured: true, roomId: room.value || null, role: role.value, x: Number(x.value), y: Number(y.value) });
-    inspector.append(node('p', `ID: ${current.id} · Address: ${current.address || 'unknown'} · Last contact: ${current.lastSeenAt || 'unknown'} · Software: ${current.softwareVersion ?? 'unknown'} · Hardware: ${current.hardwareVersion ?? 'unknown'}`, 'vm-help'));
+  if (type === 'room') data = () => ({ name: name.value.trim() });
+  else {
+    const assigned = field(form, 'Room', current?.roomId || '', [['','Unassigned'], ...rooms.map(r => [r.id,r.name])]);
+    const role = type === 'reader' ? field(form, 'Role', current?.role || 'entry', Object.entries(roles)) : null;
+    data = () => ({ name: name.value.trim(), roomId: assigned.value || null, ...(role ? { role: role.value, configured: true } : {}) });
   }
-  const initialValues = data();
-  const save = node('button', type === 'new' ? 'Create room' : type === 'reader' && !current.configured ? 'Add reader' : 'Save details'); save.type = 'submit'; form.append(save);
+  const initial = data();
+  const save = node('button', id ? 'Save' : 'Create'); save.type = 'submit'; save.dataset.save = 'true'; form.append(save);
   form.addEventListener('submit', async e => {
-    e.preventDefault(); if (!canEdit()) return;
-    // An inspector remains untouched by live updates. Send only edited fields,
-    // so saving a name cannot undo geometry changed meanwhile on the map.
-    const values = data();
-    const patch = type === 'new' || (type === 'reader' && !current.configured)
-      ? values : Object.fromEntries(Object.entries(values).filter(([key, value]) => value !== initialValues[key]));
+    e.preventDefault(); if (!canEdit()) { if (locked) flashLock(); return; }
+    const values = data(); let patch = id ? Object.fromEntries(Object.entries(values).filter(([key,value]) => value !== initial[key])) : values;
+    if (type === 'reader' && !current.configured) patch.configured = true;
+    if (!id) patch = { ...patch, x: type === 'room' || !patch.roomId ? 1000 : 20, y: type === 'room' || !patch.roomId ? 1000 : 20, ...(type === 'room' ? { width:320,height:220,enabled:true } : {}) };
     if (!Object.keys(patch).length) return;
-    const result = await persist(type === 'reader' ? 'reader' : 'room', id, patch);
-    if (result && selected?.id === id && selected.type === type) select(type === 'new' ? 'room' : type, result.id);
-  });
-  inspector.append(form, node('p', 'Unlock the map to edit. Changes affect local configuration only.', 'vm-help')); syncControls(); draw(true);
+    const result = await persist(type, id, patch); if (result && selected?.type === type && selected.id === id) select(type, result.id);
+  }); inspector.append(form);
+  if (type === 'room' && id) {
+    const items = node('div', undefined, 'vm-assigned'); items.dataset.assignedRoom = id;
+    for (const kind of ['reader','screen']) for (const item of collection(kind).filter(i => i.roomId === id && (kind !== 'reader' || i.configured))) items.append(button(`${kind === 'reader' ? 'Reader' : 'Screen'}: ${item.name || item.id}`, () => select(kind,item.id)));
+    if (!items.children.length) items.append(node('p', 'No readers or screens assigned.', 'vm-help')); inspector.append(items);
+  }
+  if (type === 'reader') {
+    const date = new Date(current.lastSeenAt);
+    inspector.append(node('p', `ID: ${id} · Last contact: ${Number.isFinite(date.getTime()) ? date.toLocaleTimeString('en-GB') : 'unknown'}`, 'vm-help'));
+  }
+  if (type === 'screen' && id) { const link = node('a','Screen settings','vm-settings-link'); link.href = `/screen-settings?screen=${encodeURIComponent(id)}`; inspector.append(link); }
+  syncControls(); draw(true);
 }
-async function persist(type, id, data) {
-  if (!canEdit()) return null;
-  pending = true; syncControls(); error.hidden = true;
+async function persist(type, id, patch) {
+  if (!canEdit()) return null; pending = true; syncControls(); error.hidden = true;
   try {
-    const response = await fetch(`/api/${type === 'room' ? 'rooms' : 'readers'}${id ? `/${encodeURIComponent(id)}` : ''}`, { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data), signal: AbortSignal.timeout(10000) });
+    const response = await fetch(`/api/${type}s${id ? `/${encodeURIComponent(id)}` : ''}`, { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type':'application/json' }, body:JSON.stringify(patch), signal:AbortSignal.timeout(10000) });
     const payload = await response.json(); if (!response.ok) throw new Error(payload.error || `Save failed (${response.status})`);
-    const item = payload[type]; if (!item) throw new Error('Missing saved item in response');
-    if (type === 'room') rooms = rooms.some(r => r.id === item.id) ? rooms.map(r => r.id === item.id ? item : r) : [...rooms, item];
-    else readers = readers.map(r => r.id === item.id ? item : r);
+    const item = payload[type]; if (!item) throw new Error('Missing saved item');
+    const updated = collection(type).some(r => r.id === item.id) ? collection(type).map(r => r.id === item.id ? item : r) : [...collection(type),item];
+    if (type === 'room') rooms = updated; else if (type === 'reader') readers = updated; else screens = updated;
     return item;
-  } catch (e) { error.textContent = `Could not confirm the change: ${e.message}. Check the latest state before retrying.`; error.hidden = false; return null; }
-  finally { pending = false; if (locked) fit(); syncControls(); listReaders(); draw(true); }
+  } catch(e) { error.textContent = `Could not confirm the change: ${e.message}. Check the latest state before retrying.`; error.hidden = false; return null; }
+  finally { pending = false; if (locked) fit(); syncControls(); listReaders(); refreshAssigned(); draw(true); }
 }
-function point(e) { const matrix = canvas.getScreenCTM(); if (!matrix) return { x: 0, y: 0 }; return new DOMPoint(e.clientX, e.clientY).matrixTransform(matrix.inverse()); }
-function begin(e, kind, item, resize = false) {
-  if (!canEdit() || e.button !== 0) return;
-  e.preventDefault(); e.stopPropagation();
-  gesture = { pointer: e.pointerId, kind, id: item.id, original: { ...item }, start: point(e), preview: {}, resize, moved: false };
+function point(e) { const matrix = canvas.getScreenCTM(); return matrix ? new DOMPoint(e.clientX,e.clientY).matrixTransform(matrix.inverse()) : {x:0,y:0}; }
+function roomAt(p) { return [...rooms].reverse().find(r => p.x >= r.x && p.x <= r.x+r.width && p.y >= r.y && p.y <= r.y+r.height); }
+function begin(e, kind, item, edge = null) {
+  if (e.button !== 0 || !item) return;
+  if (!canEdit()) return;
+  e.preventDefault(); e.stopPropagation(); gesture = { pointer:e.pointerId, kind, id:item.id, original:{...item}, start:point(e), preview:{}, edge, moved:false };
   canvas.setPointerCapture(e.pointerId);
 }
 function cancelGesture() { const old = gesture; gesture = null; if (old && canvas.hasPointerCapture(old.pointer)) canvas.releasePointerCapture(old.pointer); draw(true); }
-canvas.addEventListener('pointerdown', e => { if (e.target.dataset.pan && canEdit() && e.button === 0) { gesture = { pointer: e.pointerId, kind: 'pan', start: point(e), original: { ...view }, moved: false }; canvas.setPointerCapture(e.pointerId); } });
+canvas.addEventListener('pointerdown', e => {
+  if (!e.target.dataset.pan || e.button !== 0) return;
+  if (!canEdit()) { clearSelection(); return; }
+  gesture = {pointer:e.pointerId,kind:'pan',start:point(e),original:{...view},moved:false}; canvas.setPointerCapture(e.pointerId);
+});
 canvas.addEventListener('pointermove', e => {
   if (!gesture || gesture.pointer !== e.pointerId) return;
-  const p = point(e), g = gesture, dx = p.x - g.start.x, dy = p.y - g.start.y;
-  if (Math.abs(dx) + Math.abs(dy) > 3) g.moved = true;
-  if (g.kind === 'pan') { view.x -= dx; view.y -= dy; }
-  else if (g.kind === 'room') {
-    g.preview = g.resize ? { width: clamp(snap(g.original.width + dx), 120, 2000), height: clamp(snap(g.original.height + dy), 80, 2000) } : { x: clamp(snap(g.original.x + dx), 0, 10000), y: clamp(snap(g.original.y + dy), 0, 10000) };
-  } else { const room = rooms.find(r => r.id === g.original.roomId); if (room) g.preview = { x: clamp(snap(g.original.x + dx), 0, room.width), y: clamp(snap(g.original.y + dy), 0, room.height) }; }
-  draw(true);
-});
-canvas.addEventListener('pointerup', async e => {
-  if (!gesture || gesture.pointer !== e.pointerId) return;
-  const g = gesture; gesture = null; if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
-  if (g.kind !== 'pan') {
-    if (g.moved) await persist(g.kind, g.id, g.preview);
-    else select(g.kind, g.id);
+  const p = point(e), g = gesture, dx=p.x-g.start.x, dy=p.y-g.start.y;
+  if (Math.abs(dx)+Math.abs(dy)>3) g.moved=true;
+  if (g.kind==='pan') { view.x-=dx; view.y-=dy; }
+  else if (g.kind==='room') {
+    const o=g.original;
+    if (g.edge==='left') { const right=o.x+o.width, x=clamp(snap(o.x+dx),Math.max(-10000,right-2000),Math.min(10000,right-120)); g.preview={x,width:right-x}; }
+    else if(g.edge==='right') g.preview={width:clamp(snap(o.width+dx),120,2000)};
+    else if(g.edge==='top') { const bottom=o.y+o.height, y=clamp(snap(o.y+dy),Math.max(-10000,bottom-2000),Math.min(10000,bottom-80)); g.preview={y,height:bottom-y}; }
+    else if(g.edge==='bottom') g.preview={height:clamp(snap(o.height+dy),80,2000)};
+    else g.preview={x:clamp(snap(o.x+dx),-10000,10000),y:clamp(snap(o.y+dy),-10000,10000)};
+  } else {
+    const origin=worldPosition(g.original), world={x:origin.x+dx,y:origin.y+dy}, target=roomAt(p);
+    if(target) g.preview={roomId:target.id,x:clamp(snap(world.x-target.x),0,Math.max(0,target.width-116)),y:clamp(snap(world.y-target.y),0,Math.max(0,target.height-42))};
+    else if(g.kind==='screen') g.preview={roomId:null,x:clamp(snap(world.x),-10000,10000),y:clamp(snap(world.y),-10000,10000)};
+    else g.preview={};
   }
   draw(true);
 });
-canvas.addEventListener('pointercancel', cancelGesture);
-canvas.addEventListener('lostpointercapture', () => { if (gesture) cancelGesture(); });
-canvas.addEventListener('keydown', e => { if (e.key === 'Escape' && gesture) cancelGesture(); });
-canvas.addEventListener('wheel', e => { if (!canEdit()) return; e.preventDefault(); zoom(e.deltaY > 0 ? 1.15 : 1 / 1.15); }, { passive: false });
-canvas.addEventListener('dragover', e => { if (canEdit() && [...e.dataTransfer.types].includes('application/x-venue-reader')) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; } });
-canvas.addEventListener('drop', async e => {
-  if (!canEdit()) return; e.preventDefault();
-  const id = e.dataTransfer.getData('application/x-venue-reader'), reader = readers.find(r => r.id === id); if (!reader) return;
-  const p = point(e), room = [...rooms].reverse().find(r => p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height);
-  if (!room) return;
-  if (!reader.configured) { select('reader', id); error.textContent = 'Use Add reader in the details form before placing this discovered reader.'; error.hidden = false; return; }
-  await persist('reader', id, { roomId: room.id, x: clamp(snap(p.x - room.x), 0, room.width), y: clamp(snap(p.y - room.y), 0, room.height) });
+canvas.addEventListener('pointerup', async e => {
+  if(!gesture || gesture.pointer!==e.pointerId)return;
+  const g=gesture; gesture=null; if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);
+  suppressClick=g.moved; setTimeout(()=>{suppressClick=false;},0);
+  if(g.kind==='pan') { if(!g.moved)clearSelection(); }
+  else if(g.moved && Object.keys(g.preview).length) await persist(g.kind,g.id,g.preview);
+  else if(!g.moved)select(g.kind,g.id);
+  draw(true);
 });
-export function updateVenueMap(state = {}) {
-  if (state.rooms) rooms = state.rooms; if (state.readers) readers = state.readers;
-  connected = state.connected ?? connected;
-  if (!connected && gesture) cancelGesture();
-  if (locked) fit(); listReaders(); syncControls(); draw();
+canvas.addEventListener('pointercancel',cancelGesture);
+canvas.addEventListener('lostpointercapture',()=>{if(gesture)cancelGesture();});
+canvas.addEventListener('keydown',e=>{if(e.key==='Escape'){if(gesture)cancelGesture();else clearSelection();}});
+canvas.addEventListener('wheel',e=>{
+  if(!canEdit() || gesture)return; e.preventDefault();
+  const p=point(e), factor=e.deltaY>0?1.15:1/1.15, width=clamp(view.w*factor,240,28000), scale=width/view.w;
+  view={x:p.x-(p.x-view.x)*scale,y:p.y-(p.y-view.y)*scale,w:width,h:view.h*scale};draw(true);
+},{passive:false});
+canvas.addEventListener('dragover',e=>{if(canEdit() && [...e.dataTransfer.types].includes('application/x-venue-reader')){e.preventDefault();e.dataTransfer.dropEffect='move';}});
+canvas.addEventListener('drop',async e=>{
+  if(!canEdit())return; e.preventDefault(); const id=e.dataTransfer.getData('application/x-venue-reader'), reader=itemFor('reader',id);if(!reader)return;
+  const p=point(e),room=roomAt(p);if(!room)return;
+  await persist('reader',id,{configured:true,name:reader.name || reader.id,role:reader.role || 'entry',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))});
+});
+export function updateVenueMap(state={}) {
+  if(state.rooms)rooms=state.rooms;if(state.readers)readers=state.readers;if(state.screens)screens=state.screens;if(state.sessions)sessions=state.sessions;
+  connected=state.connected ?? connected;if(!connected && gesture)cancelGesture();
+  if(locked)fit();listReaders();syncControls();refreshAssigned();draw();
 }
-inspector.append(node('p', 'Select a room on the map or a reader from the list to see its details.', 'vm-help'));
-setInterval(() => draw(), 1000); syncControls(); draw(true);
+setInterval(()=>draw(),1000);syncControls();draw(true);
+
+
+
