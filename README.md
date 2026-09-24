@@ -146,7 +146,9 @@ configured assigned readers, red indicates a stale reader, and grey indicates no
 configured readers. Active team markers show the last registered
 room, not verified physical occupancy. Unsaved inspector fields survive live updates.
 
-Use **Add screen** to create a display block. Select it to assign a room, change its
+Use **Add room** or **Add screen** to enter a name in a dialog, then click the map
+to place the new block. No configuration is saved until placement; Escape cancels.
+Screens placed inside a room are assigned to it. Select a screen to change its
 name or open its advanced settings. See [Screens and media](docs/screens.md) for
 player setup, media uploads and automation.
 
@@ -218,3 +220,10 @@ including repeat placements and multiple readers for the same room. Room visits
 remain transition-based: these actions do not duplicate visit history. Repeated
 firmware snapshots never replay an automation action. Each new action replaces
 current playback; legacy queue rules are normalized to replacement behavior.
+
+## Current teams and history
+
+Overview shows only pending and active teams. Reception opens on **Current teams**;
+finished, expired and cancelled sessions move automatically to **History**. Search
+history by team name, filter its status and browse 15 sessions per page. Visit
+history remains available without keeping old teams in the operational view.
