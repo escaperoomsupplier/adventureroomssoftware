@@ -33,14 +33,14 @@ export class ScreenStore {
     return {id:value.id,name:value.name,roomId:value.roomId,x:value.x,y:value.y,defaults};
   }
   #action(input) { if(!object(input) || !['image','video','audio'].includes(input.type)) fail(400,'Invalid action.'); this.#media(input.mediaId,[input.type]); if(!Number.isFinite(input.durationSeconds) || input.durationSeconds<1 || input.durationSeconds>3600) fail(400,'Duration must be between 1 and 3600 seconds.'); this.#volume(input.volume); return {type:input.type,mediaId:input.mediaId,durationSeconds:input.durationSeconds,volume:input.volume}; }
-  #rule(input) { if(!object(input) || !identifier(input.id)) fail(400,'Invalid rule.'); this.#room(input.roomId); this.#get('screens',input.screenId); if(!['room.entered','room.exited'].includes(input.trigger) || !['replace','queue'].includes(input.mode) || typeof input.enabled!=='boolean') fail(400,'Invalid rule trigger, mode or enabled flag.'); return {id:input.id,name:name(input.name),roomId:input.roomId,trigger:input.trigger,screenId:input.screenId,action:this.#action(input.action),mode:input.mode,enabled:input.enabled}; }
+  #rule(input) { if(!object(input) || !identifier(input.id)) fail(400,'Invalid rule.'); this.#room(input.roomId); this.#get('screens',input.screenId); if(!['room.entered','room.exited'].includes(input.trigger) || !['replace','queue'].includes(input.mode) || typeof input.enabled!=='boolean') fail(400,'Invalid rule trigger, mode or enabled flag.'); return {id:input.id,name:name(input.name),roomId:input.roomId,trigger:input.trigger,screenId:input.screenId,action:this.#action(input.action),mode:'replace',enabled:input.enabled}; }
   listScreens() { return this.#list('screens'); }
   getScreen(id) { return this.#get('screens',id); }
   createScreen(input) { if(!object(input)) fail(400,'Invalid screen.'); return this.#save('screens',this.#screen({roomId:null,x:input.roomId?20:1000,y:input.roomId?20:1000,defaults:initialDefaults(),...input,id:randomUUID()})); }
   updateScreen(id,input) { if(!object(input)) fail(400,'Invalid screen update.'); return this.#save('screens',this.#screen({...this.getScreen(id),...input,id})); }
   deleteScreen(id) { this.getScreen(id); if(this.listRules().some(rule=>rule.screenId===id)) fail(409,'Screen is referenced by a rule.'); return this.#atomic(()=>{this.db.prepare('DELETE FROM configuration_items WHERE kind=? AND id=?').run('screens',id);this.db.prepare("UPDATE screen_playback SET status='cancelled' WHERE screen_id=? AND status IN ('playing','queued')").run(id);return {id};}); }
   listRules() { return this.#list('rules'); }
-  createRule(input) { if(!object(input)) fail(400,'Invalid rule.'); return this.#save('rules',this.#rule({mode:'queue',enabled:true,...input,id:randomUUID()})); }
+  createRule(input) { if(!object(input)) fail(400,'Invalid rule.'); return this.#save('rules',this.#rule({mode:'replace',enabled:true,...input,id:randomUUID()})); }
   updateRule(id,input) { if(!object(input)) fail(400,'Invalid rule update.'); return this.#save('rules',this.#rule({...this.#get('rules',id),...input,id})); }
   deleteRule(id) { this.#get('rules',id); return this.#atomic(()=>{this.db.prepare('DELETE FROM configuration_items WHERE kind=? AND id=?').run('rules',id);this.db.prepare("UPDATE screen_playback SET status='cancelled' WHERE rule_id=? AND status IN ('playing','queued')").run(id); return {id};}); }
   listMedia() { return this.#list('media'); }
@@ -48,19 +48,38 @@ export class ScreenStore {
   #validateMedia(input) { if(!object(input) || !identifier(input.id) || !['image','video','audio'].includes(input.kind) || typeof input.name!=='string' || !input.name.trim() || input.name.length>255 || !Number.isSafeInteger(input.sizeBytes) || input.sizeBytes<1 || typeof input.mimeType!=='string' || !input.mimeType.startsWith(`${input.kind}/`) || typeof input.path!=='string' || !input.path.startsWith('media/') || input.path.includes('\\') || input.path.includes('\0') || input.path.split('/').some(part => !part || part==='.' || part==='..' || part.includes(':'))) fail(400,'Invalid media metadata.'); return structuredClone(input); }
   addMedia(input) { const value=this.#validateMedia(input); if(this.listMedia().some(item=>item.id===value.id)) fail(409,'Media already exists.');return this.#save('media',value); }
   deleteMedia(id) { this.getMedia(id); const used=this.listScreens().some(screen=>screen.defaults.background.mediaId===id || screen.defaults.music.mediaId===id) || this.listRules().some(rule=>rule.action.mediaId===id) || this.db.prepare("SELECT action_json FROM screen_playback WHERE status IN ('playing','queued')").all().some(row=>JSON.parse(row.action_json).mediaId===id); if(used) fail(409,'Media is in use by a screen, rule or playback.'); this.db.prepare('DELETE FROM configuration_items WHERE kind=? AND id=?').run('media',id); return {id}; }
-  validateConfiguration() { for(const media of this.listMedia()) this.#validateMedia(media); for(const screen of this.listScreens()) this.#save('screens',this.#screen(screen));for(const rule of this.listRules())this.#rule(rule);return true; }
-  #enqueue(screenId, action, {eventId=null,ruleId=null,mode='queue',createdAt=this.now()}={}) {
-    const id=randomUUID(), now=this.now();
-    // Queued announcements are useful for at most 60 seconds after their source event.
-    const expiresAt=createdAt+60000; const queued=this.db.prepare("SELECT COUNT(*) AS count FROM screen_playback WHERE screen_id=? AND status='queued'").get(screenId).count;
-    const status=expiresAt<=now?'expired':mode==='queue' && queued>=100?'dropped':'queued';
-    const inserted=this.db.prepare('INSERT OR IGNORE INTO screen_playback(id,screen_id,event_id,rule_id,action_json,status,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)').run(id,screenId,eventId,ruleId,JSON.stringify(action),status,createdAt,expiresAt);
-    if(inserted.changes && mode==='replace' && status==='queued') this.db.prepare("UPDATE screen_playback SET status='interrupted' WHERE screen_id=? AND id<>? AND status IN ('playing','queued')").run(screenId,id);
+  validateConfiguration() { for(const media of this.listMedia()) this.#validateMedia(media); for(const screen of this.listScreens()) this.#save('screens',this.#screen(screen));for(const rule of this.listRules())this.#save('rules',this.#rule(rule));return true; }
+  #enqueue(screenId, action, {eventId=null,ruleId=null,createdAt=this.now()}={}) {
+    const id=randomUUID(), now=this.now(), expiresAt=createdAt+60000;
+    // Old undelivered events must not interrupt a newer live action.
+    const status=expiresAt<=now?'expired':'playing';
+    const inserted=this.db.prepare('INSERT OR IGNORE INTO screen_playback(id,screen_id,event_id,rule_id,action_json,status,created_at,expires_at,starts_at,ends_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(id,screenId,eventId,ruleId,JSON.stringify(action),status,createdAt,expiresAt,status==='playing'?now:null,status==='playing'?now+action.durationSeconds*1000:null);
+    if(inserted.changes && status==='playing') this.db.prepare("UPDATE screen_playback SET status='interrupted' WHERE screen_id=? AND id<>? AND status IN ('playing','queued')").run(screenId,id);
     return id;
   }
   getEventCursor() { return this.db.prepare('SELECT sequence FROM screen_cursor WHERE singleton=1').get().sequence; }
-  syncEvents(events) { return this.#atomic(()=>{let cursor=this.db.prepare('SELECT sequence FROM screen_cursor WHERE singleton=1').get().sequence; const rules=this.listRules(); for(const event of [...events].sort((a,b)=>a.sequence-b.sequence)) { if(!Number.isSafeInteger(event.sequence) || event.sequence<=cursor)continue; if(!identifier(event.id) || !Number.isFinite(Date.parse(event.occurredAt))) fail(400,'Invalid screen event.'); if(event.type!=='room.exited' || event.source==='reader') for(const rule of rules) if(rule.enabled && rule.trigger===event.type && rule.roomId===event.roomId) this.#enqueue(rule.screenId,rule.action,{eventId:event.id,ruleId:rule.id,mode:rule.mode,createdAt:Date.parse(event.occurredAt)}); cursor=event.sequence; }this.db.prepare('UPDATE screen_cursor SET sequence=? WHERE singleton=1').run(cursor); return this.reconcile();}); }
-  reconcile() { return this.#atomic(()=>{const now=this.now(); let changed=0; changed+=Number(this.db.prepare("UPDATE screen_playback SET status='completed' WHERE status='playing' AND ends_at<=?").run(now).changes); changed+=Number(this.db.prepare("UPDATE screen_playback SET status='expired' WHERE status='queued' AND expires_at<=?").run(now).changes); for(const screen of this.listScreens()) { if(this.db.prepare("SELECT id FROM screen_playback WHERE screen_id=? AND status='playing'").get(screen.id))continue; const next=this.db.prepare("SELECT * FROM screen_playback WHERE screen_id=? AND status='queued' ORDER BY created_at,rowid LIMIT 1").get(screen.id); if(next) {const action=JSON.parse(next.action_json);this.db.prepare("UPDATE screen_playback SET status='playing',starts_at=?,ends_at=? WHERE id=?").run(now,now+action.durationSeconds*1000,next.id);changed++;} }return changed>0;}); }
+  syncEvents(events) { return this.#atomic(()=>{
+    let cursor=this.getEventCursor(), changed=false;
+    const rules=this.listRules();
+    for(const event of [...events].sort((a,b)=>a.sequence-b.sequence)) {
+      if(!Number.isSafeInteger(event.sequence) || event.sequence<=cursor)continue;
+      if(!identifier(event.id) || !Number.isFinite(Date.parse(event.occurredAt))) fail(400,'Invalid screen event.');
+      if(event.source==='reader') for(const rule of rules) if(rule.enabled && rule.trigger===event.type && rule.roomId===event.roomId) {
+        this.#enqueue(rule.screenId,rule.action,{eventId:event.id,ruleId:rule.id,createdAt:Date.parse(event.occurredAt)});
+        changed=true;
+      }
+      cursor=event.sequence;
+    }
+    this.db.prepare('UPDATE screen_cursor SET sequence=? WHERE singleton=1').run(cursor);
+    return this.reconcile() || changed;
+  }); }
+  reconcile() { return this.#atomic(()=>{
+    const completed=this.db.prepare("UPDATE screen_playback SET status='completed' WHERE status='playing' AND ends_at<=?").run(this.now()).changes;
+    // Retire queues created by older releases instead of replaying them.
+    const retired=this.db.prepare("UPDATE screen_playback SET status='interrupted' WHERE status='queued'").run().changes;
+    return Number(completed)+Number(retired)>0;
+  }); }
   preview(screenId,action) { this.getScreen(screenId);const validated=this.#action(action);return this.#atomic(()=>{const id=this.#enqueue(screenId,validated,{mode:'replace'});this.reconcile();const state=this.screenState(screenId);return state.playback;}); }
   screenState(id,sessions=[]) { const screen=this.getScreen(id);const current=this.db.prepare("SELECT * FROM screen_playback WHERE screen_id=? AND status='playing'").get(id); return {screen,playback:current?{id:current.id,action:JSON.parse(current.action_json),startsAt:new Date(current.starts_at).toISOString(),endsAt:new Date(current.ends_at).toISOString()}:null,teams:sessions.filter(team=>team.status==='active' && team.currentRoomId===screen.roomId && screen.roomId!==null && Date.parse(team.endsAt)>this.now()),serverNow:new Date(this.now()).toISOString(),media:this.listMedia().map(({path,...media})=>({...media,url:`/media/${encodeURIComponent(media.id)}`}))}; }
 }

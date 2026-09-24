@@ -135,8 +135,9 @@ be negative; new rooms begin near `(1000,1000)`. Numeric geometry and enabled fi
 are not part of the map inspector. Keyboard users can focus a block and use arrow
 keys to move it, or Shift and arrows to resize a room.
 
-Drag a discovered reader from the right-hand list onto a room to configure and
-place it. Reader blocks can move within a room or between rooms. Give each reader
+Choose **Add reader** to list readers currently online. Select one, then click a
+room to place and assign it. Clicking outside a room or pressing Escape cancels
+placement. Reader blocks can move within a room or between rooms. Give each reader
 a friendly name and select its role in the inspector. Room details list its readers
 and screens. Multiple readers can belong to a room, each backed by its own UUPC.
 
@@ -203,11 +204,17 @@ override values in settings for the current run.
 
 Configure displays at `/screen-settings`; open `/screens` to choose a display or
 `/screens/:id` to open its player. Press **Start screen** on the display for the
-initial audio/fullscreen gesture. Defaults include a colour/image/video background,
+initial audio/fullscreen gesture. Defaults include a color/image/video background,
 optional music and team timers. Timed actions require a duration of 1–3600 seconds
-and can replace the current action or queue behind it.
+and always replace the current action; no action queue is used.
 
 Media uploads are local, limited to 512 MB per file, and support PNG, JPEG, GIF,
 WebP, MP4, WebM, MP3, WAV and OGG. See [Screens and media](docs/screens.md) for setup
 and backup instructions. This remains a Node application; no desktop installer is
 included.
+
+Automation triggers follow fresh placements on Enter Room and Exit Room readers,
+including repeat placements and multiple readers for the same room. Room visits
+remain transition-based: these actions do not duplicate visit history. Repeated
+firmware snapshots never replay an automation action. Each new action replaces
+current playback; legacy queue rules are normalized to replacement behavior.

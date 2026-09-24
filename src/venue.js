@@ -93,9 +93,8 @@ export class VenueStore {
         if (room && session.currentRoomId === room.id) {
           this.#exitVisit(session.id, room.id, 'reader_exit');
           this.db.prepare('UPDATE reception_sessions SET current_room_id=NULL,current_room_name=NULL WHERE id=?').run(session.id);
-          this.#event('room.exited', session.id, room.id, 'reader');
-          return true;
         }
+        if (room) { this.#event('room.exited', session.id, room.id, 'reader'); return true; }
         return changed;
       }
       if (room && session.currentRoomId !== room.id) {
@@ -103,6 +102,11 @@ export class VenueStore {
         this.db.prepare(`INSERT INTO team_visits(id,session_id,room_id,room_name,reader_id,reader_name,entered_at)
           VALUES(?,?,?,?,?,?,?)`).run(randomUUID(), session.id, room.id, room.name, device.id, reader.name, this.now());
         this.db.prepare('UPDATE reception_sessions SET current_room_id=?,current_room_name=? WHERE id=?').run(room.id, room.name, session.id);
+        changed = true;
+      }
+      // Automation follows each fresh reader placement; visit history follows
+      // room transitions, so multiple entry readers do not duplicate a visit.
+      if (reader.role === 'entry' && room) {
         this.#event('room.entered', session.id, room.id, 'reader');
         changed = true;
       }

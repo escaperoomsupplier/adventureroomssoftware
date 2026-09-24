@@ -7,9 +7,9 @@ import { startServer } from '../src/server.js';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=', 'base64');
 const deviceId = 'ROOM_DEVICE_01';
-async function fixture(t) {
+async function fixture(t, overrides = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'media-workflow-'));
-  const options = { host: '127.0.0.1', port: 0, discovery: false, configDirectory: join(directory, 'config'), legacyDatabasePath: join(directory, 'missing.sqlite'), logger: { error() {} } };
+  const options = { host: '127.0.0.1', port: 0, discovery: false, configDirectory: join(directory, 'config'), legacyDatabasePath: join(directory, 'missing.sqlite'), logger: { error() {} }, ...overrides };
   let app = await startServer(options);
   t.after(async () => { await app.close(); await rm(directory, { recursive: true, force: true }); });
   return { directory, options, get app() { return app; }, get url() { return `http://127.0.0.1:${app.address.port}`; },
@@ -88,13 +88,15 @@ test('firmware entry commits playback once and exit clears location without fini
   const f = await fixture(t);
   const { room, screen } = await configured(f);
   await firmware(f, '00000000_0');
-  await write(f, `/api/readers/${deviceId}`, { configured: true, roomId: room.id, role: 'start' }, 'PATCH');
+  await write(f, `/api/readers/${deviceId}`, { configured: true, roomId: room.id, role: 'entry' }, 'PATCH');
   const { session } = await (await write(f, '/api/reception/sessions', { name: 'Team', durationMinutes: 60 })).json();
   await write(f, `/api/reception/sessions/${session.id}/cards`, { uid: 'AABBCCDD' });
+  await write(f, `/api/reception/sessions/${session.id}/start`);
   const sync = f.app.screens.syncEvents;
   f.app.screens.syncEvents = function(events) { sync.call(this, events); throw new Error('Simulated playback failure'); };
   assert.equal((await firmware(f, 'AABBCCDD_1')).status, 500);
-  assert.equal(f.app.reception.getSession(session.id).status, 'pending');
+  assert.equal(f.app.reception.getSession(session.id).status, 'active');
+  assert.equal(f.app.reception.getSession(session.id).currentRoomId, null);
   assert.deepEqual(f.app.venue.listDomainEvents(), []);
   assert.equal(f.app.screens.screenState(screen.id).playback, null);
   f.app.screens.syncEvents = sync;
@@ -198,4 +200,34 @@ test('offline configuration identifiers with underscores remain usable through r
   for (const path of ['/screen-settings', '/media', '/automations', '/screens', '/screens/screen_library', '/screen-player.js', '/screen-player.css', '/screen-picker.js', '/media-settings.js', '/media-settings.css']) {
     assert.equal((await fetch(`${f.url}${path}`)).status, 200, path);
   }
+});
+
+
+test('screen presence follows live browsers, expires after missing heartbeats and supports multiple players', async t => {
+  let now = Date.now();
+  const f = await fixture(t, { presenceNow: () => now });
+  const { screen } = await configured(f);
+  const online = async () => (await (await fetch(`${f.url}/api/screens`)).json()).find(s => s.id === screen.id).online;
+  const connect = async clientId => {
+    const controller = new AbortController(); t.after(() => controller.abort());
+    const response = await fetch(`${f.url}/api/screens/${screen.id}/live?client=${clientId}`, { signal: controller.signal });
+    assert.equal(response.status, 200);
+    await response.body.getReader().read();
+    return controller;
+  };
+  assert.equal(await online(), false);
+  const first = await connect('browser_one');
+  assert.equal(await online(), true);
+  now += 30001;
+  assert.equal(await online(), false);
+  assert.equal((await write(f, `/api/screens/${screen.id}/presence`, { clientId: 'browser_one' })).status, 200);
+  assert.equal(await online(), true);
+  const second = await connect('browser_two');
+  first.abort();
+  assert.equal(await online(), true);
+  second.abort();
+  for (let attempt = 0; attempt < 20 && await online(); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(await online(), false);
+  assert.equal((await write(f, `/api/screens/${screen.id}/presence`, { clientId: 'unknown' })).status, 409);
+  assert.equal((await readFile(join(f.options.configDirectory, 'screens.json'), 'utf8')).includes('online'), false);
 });

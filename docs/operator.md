@@ -23,8 +23,9 @@ before relying on it. Reconnection refreshes the current view.
 1. Unlock the map and choose **Add room**. Enter its name and save.
 2. Drag its rectangle to move it. Drag any edge to resize. Drag empty space to pan,
    use the mouse wheel to zoom, or press **Fit view** to see the layout.
-3. Drag a discovered reader from the right-hand list onto a room. This configures
-   and places it. Select its block to give it a friendly name and choose its role.
+3. Choose **Add reader**, select an online reader, then click a room to place and
+   assign it. Click outside a room or press Escape to cancel. Select its block to
+   give it a friendly name and choose its role.
 4. Move reader blocks within or between rooms. The room inspector lists its readers
    and screens. Positions are saved locally; multiple readers can share a room.
 5. Use **Add screen** for a display block. Assign its room and open **Screen settings**
@@ -40,7 +41,7 @@ to move it; Shift and arrows resize a room. Keyboard focus remains visible.
 Green rooms have recent contact from every configured assigned reader; red rooms
 have at least one reader unseen for more than 25 seconds. Grey means no configured
 readers or a disabled room. Team markers show their last registered location.
-Neither colour nor markers prove physical occupancy or puzzle readiness.
+Neither color nor markers prove physical occupancy or puzzle readiness.
 
 ## Prepare a team and wristbands
 
