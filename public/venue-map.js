@@ -7,7 +7,7 @@ const snap = value => Math.round(value / 20) * 20;
 const roles = { start: 'Start time', finish: 'Stop time', entry: 'Entry Room', exit: 'Exit Room' };
 let rooms = [], readers = [], screens = [], sessions = [], connected = false, locked = true, pending = false;
 let selected = null, gesture = null, signature = '', listSignature = '', flashTimer, suppressClick = false;
-let readerDragging = false;
+let placement = null;
 let view = { x: 500, y: 700, w: 1000, h: 600 };
 const canEdit = () => !locked && connected && !pending;
 const online = (type,item) => connected && (type === 'screen' ? item.online === true : Number.isFinite(Date.parse(item.lastSeenAt)) && Date.now() - Date.parse(item.lastSeenAt) <= 25000);
@@ -26,7 +26,7 @@ const itemFor = (type, id) => collection(type).find(item => item.id === id);
 const button = (text, action) => { const b = node('button', text); b.type = 'button'; b.addEventListener('click', action); return b; };
 const shell = node('section', undefined, 'vm-shell');
 const header = node('div', undefined, 'vm-header');
-const lockButton = button('', () => { cancelGesture(); locked = !locked; if (locked) fit(); syncControls(); draw(true); });
+const lockButton = button('', () => { cancelPlacement(); cancelGesture(); locked = !locked; if (locked) fit(); syncControls(); draw(true); });
 lockButton.className = 'vm-lock';
 const lockIcon = svgNode('svg', { viewBox: '0 0 24 24', width: 19, height: 19, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'aria-hidden': 'true' });
 const lockPath = svgNode('path'); lockIcon.append(lockPath, svgNode('rect', { x: 5, y: 10, width: 14, height: 11, rx: 2 }));
@@ -35,14 +35,16 @@ const toolbar = node('div', undefined, 'vm-toolbar');
 const fitButton = button('Fit view', () => { fit(); draw(true); });
 const addRoom = button('Add room', () => { if (locked) return flashLock(); select('room', null); });
 const addScreen = button('Add screen', () => { if (locked) return flashLock(); select('screen', null); });
-const status = node('span', '', 'vm-status'); status.setAttribute('role', 'status'); toolbar.append(fitButton, addRoom, addScreen, status);
+const addReader = button('Add reader', () => { if(locked)return flashLock(); if(!canEdit())return; cancelGesture(); cancelPlacement(); listSignature=''; listReaders(); readerDialog.showModal(); readerList.querySelector('button')?.focus(); });
+const status = node('span', '', 'vm-status'); status.setAttribute('role', 'status'); toolbar.append(fitButton, addRoom, addReader, addScreen, status);
 const error = node('p', '', 'vm-error'); error.setAttribute('role', 'alert'); error.hidden = true;
 const layout = node('div', undefined, 'vm-layout');
 const canvas = svgNode('svg', { class: 'vm-canvas', tabindex: '0', 'aria-label': 'Venue map. Tab to select items. Arrow keys move selected items; Shift and arrows resize rooms.' });
-const sidebar = node('aside', undefined, 'vm-sidebar'); sidebar.append(node('h3', 'Readers'));
-const readerList = node('div', undefined, 'vm-reader-list'); sidebar.append(readerList);
+const readerDialog=node('dialog',undefined,'vm-reader-dialog');readerDialog.setAttribute('aria-label','Choose an online reader');
+readerDialog.append(node('h3','Choose an online reader'),node('p','Select a reader, then click a room on the map. Click outside a room or press Escape to cancel.','vm-help'));
+const readerList=node('div',undefined,'vm-reader-list');readerDialog.append(readerList,button('Cancel',()=>readerDialog.close()));
 const inspector = node('section', undefined, 'vm-inspector'); inspector.setAttribute('aria-label', 'Selected item details');
-layout.append(canvas, sidebar); shell.append(header, toolbar, error, layout, inspector); mount.append(shell);
+layout.append(canvas); shell.append(header, toolbar, error, layout, inspector, readerDialog); mount.append(shell);
 
 function flashLock() {
   clearTimeout(flashTimer); lockButton.classList.remove('vm-flash');
@@ -54,14 +56,14 @@ function syncControls() {
   lockPath.setAttribute('d', locked ? 'M8 10V7a4 4 0 0 1 8 0v3' : 'M8 10V7a4 4 0 0 1 7.5-2');
   lockButton.setAttribute('aria-pressed', String(locked));
   lockButton.setAttribute('aria-label', locked ? 'Unlock map editing' : 'Lock map and fit all rooms');
-  status.textContent = !connected ? 'Disconnected' : pending ? 'Saving…' : '';
-  addRoom.disabled = addScreen.disabled = !connected || pending;
+  status.textContent = !connected ? 'Disconnected' : pending ? 'Saving…' : placement ? 'Click a room to place the reader. Escape cancels.' : '';
+  addRoom.disabled = addReader.disabled = addScreen.disabled = !connected || pending;
   for (const control of inspector.querySelectorAll('input,select,button[data-save]')) {
     control.disabled = !connected || pending;
     control.setAttribute('aria-disabled', String(!canEdit()));
     if (control.tagName === 'INPUT') control.readOnly = locked;
   }
-  for (const b of readerList.querySelectorAll('button')) b.draggable = canEdit();
+
 }
 inspector.addEventListener('pointerdown', e => {
   if (locked && e.target.closest('input,select,button[data-save]')) { e.preventDefault(); flashLock(); }
@@ -124,7 +126,7 @@ function accessible(g, type, id, label) {
 function draw(force = false) {
   if (gesture && !force) return;
   const next = JSON.stringify([rooms, readers.map(r => [r.id,r.name,r.configured,r.roomId,r.x,r.y,r.role,online('reader',r)]), screens.map(s => [s.id,s.name,s.roomId,s.x,s.y,online('screen',s)]), sessions.map(s => [s.id,s.teamName,s.status,s.currentRoomId]), rooms.map(contact), selected, locked, view]);
-  if (!force && signature === next) return; signature = next;
+  if (!force && signature === next && !placement) return; signature = next;
   const focusKey = canvas.contains(document.activeElement) ? document.activeElement.dataset.key : null;
   canvas.replaceChildren(); canvas.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
   const defs = svgNode('defs'), pattern = svgNode('pattern', { id: 'vm-grid', width: 20, height: 20, patternUnits: 'userSpaceOnUse' });
@@ -160,26 +162,25 @@ function draw(force = false) {
     const g = svgNode('g', { class: `vm-block vm-${type}${selected?.type === type && selected.id === item.id ? ' vm-selected' : ''}` });
     accessible(g, type, item.id, `${type === 'screen' ? 'Screen' : 'Reader'} ${item.name || item.id}, ${online(type,item)?'connected':'offline'}`);
     g.append(svgNode('rect', { x, y, width: 116, height: 42, rx: 6 }));
-    const icon=itemIcon(type);icon.setAttribute('x',x+7);icon.setAttribute('y',y+7);icon.setAttribute('width',17);icon.setAttribute('height',17);g.append(icon);
+    const icon=itemIcon(type);icon.setAttribute('x',x+96);icon.setAttribute('y',y+26);icon.setAttribute('width',13);icon.setAttribute('height',13);g.append(icon);
     const dot=svgNode('circle',{cx:x+106,cy:y+11,r:3.5,class:`vm-contact-dot ${online(type,item)?'vm-contact-online':'vm-contact-offline'}`});g.append(dot);
-    const text = svgNode('text', { x: x + 28, y: y + 17 }); text.textContent = (item.name || item.id).slice(0, 11); g.append(text);
+    const text = svgNode('text', { x: x + 9, y: y + 17 }); text.textContent = (item.name || item.id).slice(0, 14); g.append(text);
     const label = svgNode('text', { x: x + 9, y: y + 32, class: 'vm-block-sub' }); label.textContent = type === 'screen' ? 'Screen' : roles[item.role] || 'Reader'; g.append(label);
     const title = svgNode('title'); title.textContent = item.name || item.id; g.append(title);
     g.addEventListener('pointerdown', e => begin(e, type, original)); canvas.append(g);
   }
+  if(placement?.point){const p=placement.point,reader=itemFor('reader',placement.id);const ghost=svgNode('g',{class:'vm-block vm-reader vm-placement-ghost'});ghost.append(svgNode('rect',{x:p.x,y:p.y,width:116,height:42,rx:6}));const text=svgNode('text',{x:p.x+9,y:p.y+17});text.textContent=(reader?.name || 'Reader').slice(0,14);ghost.append(text);const icon=itemIcon('reader');for(const [key,value] of Object.entries({x:p.x+96,y:p.y+26,width:13,height:13}))icon.setAttribute(key,value);ghost.append(icon,svgNode('circle',{cx:p.x+106,cy:p.y+11,r:3.5,class:'vm-contact-dot vm-contact-online'}));canvas.append(ghost);}
   if (focusKey) [...canvas.querySelectorAll('[data-key]')].find(e => e.dataset.key === focusKey)?.focus({ preventScroll: true });
 }
 function listReaders() {
-  if(readerDragging)return;
-  const next = JSON.stringify(readers.map(r => [r.id,r.name,r.configured,r.roomId,online('reader',r)])); if (next === listSignature) return; listSignature = next;
-  const focused = document.activeElement?.dataset.readerId; readerList.replaceChildren();
-  for (const reader of readers) {
-    const b = decorateButton(button('', () => select('reader', reader.id)), 'reader', reader); b.dataset.readerId = reader.id; b.draggable = canEdit();
-    b.addEventListener('dragstart', e => { if (!canEdit()) { e.preventDefault(); if (locked) flashLock(); return; } readerDragging=true; e.dataTransfer.setData('application/x-venue-reader', reader.id); e.dataTransfer.effectAllowed = 'move'; }); b.addEventListener('dragend',()=>{readerDragging=false;listReaders();}); readerList.append(b);
-  }
-  if (!readers.length) readerList.append(node('p', 'No readers discovered.', 'vm-help'));
-  if (focused) [...readerList.querySelectorAll('button')].find(b => b.dataset.readerId === focused)?.focus({ preventScroll: true });
+  const available=readers.filter(reader=>online('reader',reader));
+  const next=JSON.stringify(available.map(reader=>[reader.id,reader.name]));if(next===listSignature)return;listSignature=next;
+  const focused=document.activeElement?.dataset.readerId;readerList.replaceChildren();
+  for(const reader of available){const b=decorateButton(button('',()=>{if(!canEdit() || !online('reader',reader))return;readerDialog.close();placement={id:reader.id,point:null};canvas.focus();syncControls();draw(true);}), 'reader',reader);b.dataset.readerId=reader.id;readerList.append(b);}
+  if(!available.length)readerList.append(node('p','No online readers available.','vm-help'));
+  if(focused)[...readerList.querySelectorAll('button')].find(b=>b.dataset.readerId===focused)?.focus({preventScroll:true});
 }
+function cancelPlacement(){placement=null;if(readerDialog.open)readerDialog.close();syncControls();draw(true);}
 function field(form, title, value, choices) {
   const wrapper = node('label', title), input = node(choices ? 'select' : 'input');
   if (choices) for (const [id, text] of choices) input.append(new Option(text, id));
@@ -265,18 +266,20 @@ async function persist(type, id, patch) {
 function point(e) { const matrix = canvas.getScreenCTM(); return matrix ? new DOMPoint(e.clientX,e.clientY).matrixTransform(matrix.inverse()) : {x:0,y:0}; }
 function roomAt(p) { return [...rooms].reverse().find(r => p.x >= r.x && p.x <= r.x+r.width && p.y >= r.y && p.y <= r.y+r.height); }
 function begin(e, kind, item, edge = null) {
-  if (e.button !== 0 || !item) return;
+  if (placement || e.button !== 0 || !item) return;
   if (!canEdit()) return;
   e.preventDefault(); e.stopPropagation(); gesture = { pointer:e.pointerId, kind, id:item.id, original:{...item}, start:point(e), preview:{}, edge, moved:false };
   canvas.setPointerCapture(e.pointerId);
 }
 function cancelGesture() { const old = gesture; gesture = null; if (old && canvas.hasPointerCapture(old.pointer)) canvas.releasePointerCapture(old.pointer); draw(true); }
 canvas.addEventListener('pointerdown', e => {
+  if (placement)return;
   if ((e.target !== canvas && !e.target.dataset.pan) || e.button !== 0) return;
   if (!canEdit()) { clearSelection(); return; }
   gesture = {pointer:e.pointerId,kind:'pan',start:point(e),original:{...view},moved:false}; canvas.setPointerCapture(e.pointerId);
 });
 canvas.addEventListener('pointermove', e => {
+  if(placement){placement.point=point(e);draw(true);return;}
   if (!gesture || gesture.pointer !== e.pointerId) return;
   const p = point(e), g = gesture, dx=p.x-g.start.x, dy=p.y-g.start.y;
   if (Math.abs(dx)+Math.abs(dy)>3) g.moved=true;
@@ -309,10 +312,11 @@ canvas.addEventListener('pointercancel',cancelGesture);
 canvas.addEventListener('lostpointercapture',()=>{if(gesture)cancelGesture();});
 canvas.addEventListener('keydown',e=>{if(e.key==='Escape'){if(gesture)cancelGesture();else clearSelection();}});
 canvas.addEventListener('wheel',e=>{
-  if(!canEdit() || gesture)return; e.preventDefault();
+  if(!canEdit() || gesture || placement)return; e.preventDefault();
   const p=point(e), factor=e.deltaY>0?1.15:1/1.15, width=clamp(view.w*factor,240,28000), scale=width/view.w;
   view={x:p.x-(p.x-view.x)*scale,y:p.y-(p.y-view.y)*scale,w:width,h:view.h*scale};draw(true);
 },{passive:false});
+/* Retained external drops are not used by the reader picker. */
 canvas.addEventListener('dragover',e=>{if(canEdit() && [...e.dataTransfer.types].includes('application/x-venue-reader')){e.preventDefault();e.dataTransfer.dropEffect='move';}});
 canvas.addEventListener('drop',async e=>{
   if(!canEdit())return; e.preventDefault(); const id=e.dataTransfer.getData('application/x-venue-reader'), reader=itemFor('reader',id);if(!reader)return;
@@ -323,9 +327,19 @@ canvas.addEventListener('drop',async e=>{
 export function updateVenueMap(state={}) {
   if(state.rooms)rooms=state.rooms;if(state.readers)readers=state.readers;if(state.screens)screens=state.screens;if(state.sessions)sessions=state.sessions;
   connected=state.connected ?? connected;if(!connected && gesture)cancelGesture();
+  if(placement && (!canEdit() || !online('reader',itemFor('reader',placement.id) || {})))cancelPlacement();
+  if(!connected && readerDialog.open)readerDialog.close();
   if(locked)fit();listReaders();syncControls();refreshAssigned();draw();
 }
-setInterval(()=>{if(!gesture){listReaders();refreshAssigned();draw();}},1000);syncControls();draw(true);
+setInterval(()=>{if(placement && !online('reader',itemFor('reader',placement.id) || {}))cancelPlacement();if(!gesture){listReaders();refreshAssigned();draw();}},1000);syncControls();draw(true);
 
 
 
+
+document.addEventListener('keydown',e=>{if(e.key==='Escape' && placement){e.preventDefault();cancelPlacement();}},true);
+document.addEventListener('click',async e=>{
+  if(!placement || e.button!==0)return;e.preventDefault();e.stopImmediatePropagation();
+  const chosen=placement,reader=itemFor('reader',chosen.id),p=canvas.contains(e.target)?point(e):null,room=p?roomAt(p):null;
+  cancelPlacement();if(!room || !canEdit() || !reader || !online('reader',reader))return;
+  const saved=await persist('reader',reader.id,{configured:true,name:reader.name || reader.id,role:reader.role || 'entry',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))});if(saved)select('reader',saved.id);
+},true);

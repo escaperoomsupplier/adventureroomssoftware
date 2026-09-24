@@ -14,3 +14,12 @@
 @keyframes vm-contact-pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } }
 @media(prefers-reduced-motion:reduce) { .vm-contact-dot { animation:none; } }
 @media(max-width:600px) { .vm-assigned { grid-template-columns:1fr; } }
+.vm-layout { grid-template-columns:minmax(0,1fr); }
+.vm-assigned { grid-template-columns:minmax(0,1fr); }
+.vm-reader-dialog { width:min(520px,calc(100vw - 32px)); max-height:80vh; padding:24px; border:1px solid #dbe5ea; border-radius:14px; color:#223d51; background:#fff; box-shadow:0 20px 80px #14263840; }
+.vm-reader-dialog::backdrop { background:#10233780; }
+.vm-reader-dialog h3 { margin-top:0; }
+.vm-reader-dialog .vm-reader-list { display:grid; grid-template-columns:1fr; gap:9px; margin:18px 0; max-height:45vh; overflow:auto; }
+.vm-reader-dialog .vm-reader-list button { width:100%; }
+.vm-placement-ghost { opacity:.7; pointer-events:none; }
+.vm-block .vm-item-icon { width:13px; height:13px; }

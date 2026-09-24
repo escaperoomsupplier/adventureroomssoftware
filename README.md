@@ -135,8 +135,9 @@ be negative; new rooms begin near `(1000,1000)`. Numeric geometry and enabled fi
 are not part of the map inspector. Keyboard users can focus a block and use arrow
 keys to move it, or Shift and arrows to resize a room.
 
-Drag a discovered reader from the right-hand list onto a room to configure and
-place it. Reader blocks can move within a room or between rooms. Give each reader
+Choose **Add reader** to list readers currently online. Select one, then click a
+room to place and assign it. Clicking outside a room or pressing Escape cancels
+placement. Reader blocks can move within a room or between rooms. Give each reader
 a friendly name and select its role in the inspector. Room details list its readers
 and screens. Multiple readers can belong to a room, each backed by its own UUPC.
 
