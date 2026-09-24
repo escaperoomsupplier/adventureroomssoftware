@@ -216,6 +216,41 @@ test('session expiry notifies live clients without further device traffic', asyn
   assert.equal((await live.next()).sessions[0].status, 'expired');
 });
 
+test('restart and UDP refresh cannot arm capture until a runtime firmware baseline arrives', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'adventure-capture-restart-'));
+  const options = { host: '127.0.0.1', port: 0, databasePath: join(directory, 'test.sqlite'), discovery: false, logger: silent };
+  let app = await startServer(options);
+  t.after(async () => { await app.close(); await rm(directory, { recursive: true, force: true }); });
+  await prepareVenue(app, `http://127.0.0.1:${app.address.port}`);
+  await app.close(); app = await startServer(options);
+  const url = `http://127.0.0.1:${app.address.port}`;
+  app.store.recordDiscovery({ id, address: '127.0.0.1' });
+  assert.equal((await (await fetch(`${url}/api/readers`)).json())[0].rfidBaselineEstablished, false);
+  assert.equal((await write(url, `/api/readers/${id}/capture`)).status, 409);
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  assert.equal((await (await fetch(`${url}/api/readers`)).json())[0].rfidBaselineEstablished, true);
+  const { capture } = await (await write(url, `/api/readers/${id}/capture`)).json();
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  assert.equal((await (await fetch(`${url}/api/captures/${capture.id}`)).json()).capture.status, 'waiting');
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_0')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  assert.equal((await (await fetch(`${url}/api/captures/${capture.id}`)).json()).capture.status, 'captured');
+});
+
+test('waiting capture cannot consume a changed held card after known offline recovery and UDP refresh', async t => {
+  const { app, url } = await fixture(t);
+  const { session } = await prepareVenue(app, url);
+  const { capture } = await (await write(url, `/api/readers/${id}/capture`)).json();
+  app.store.db.prepare('UPDATE devices SET last_seen_at=? WHERE id=?').run(new Date(Date.now()-30000).toISOString(), id);
+  app.venue.reconcile();
+  app.store.recordDiscovery({ id, address: '127.0.0.1' });
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  const recovered = (await (await fetch(`${url}/api/captures/${capture.id}`)).json()).capture;
+  assert.notEqual(recovered.status, 'captured');
+  assert.equal(recovered.uid, null);
+  assert.equal(app.reception.getSession(session.id).status, 'pending');
+});
+
 test('event endpoints and live snapshots expose at most fifteen newest events', async t => {
   const { app, url } = await fixture(t);
   await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0')));

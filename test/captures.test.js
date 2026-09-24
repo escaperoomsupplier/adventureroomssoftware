@@ -5,7 +5,7 @@ import { CaptureStore } from '../src/captures.js';
 function fixture() {
   let now = Date.parse('2026-09-24T10:00:00Z');
   const captures = new CaptureStore({ now: () => now });
-  const reader = { id: '0123456789ABCD', configured: true, lastSeenAt: new Date(now).toISOString(), lastRfid: { uid: 'AABBCCDD', placed: true } };
+  const reader = { id: '0123456789ABCD', configured: true, rfidBaselineEstablished: true, lastSeenAt: new Date(now).toISOString(), lastRfid: { uid: 'AABBCCDD', placed: true } };
   return { captures, reader, advance: ms => { now += ms; } };
 }
 
@@ -44,6 +44,7 @@ test('read requires a configured reader and a recent baseline', () => {
   const { captures, reader, advance } = fixture();
   assert.throws(() => captures.start({ ...reader, configured: false }), { status: 409 });
   assert.throws(() => captures.start({ ...reader, lastRfid: null }), { status: 409 });
+  assert.throws(() => captures.start({ ...reader, rfidBaselineEstablished: false }), { status: 409 });
   advance(25001);
   assert.throws(() => captures.start(reader), { status: 409 });
 });

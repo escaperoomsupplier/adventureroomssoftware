@@ -27,12 +27,14 @@ export class VenueStore {
   }
 
   listReaders() {
-    return this.db.prepare(`SELECT d.*,s.name,s.configured,s.room_id,s.x,s.y,s.role FROM devices d
-      LEFT JOIN reader_settings s ON s.device_id=d.id ORDER BY d.id`).all().map(row => ({
+    return this.db.prepare(`SELECT d.*,s.name,s.configured,s.room_id,s.x,s.y,s.role,o.device_id AS observed FROM devices d
+      LEFT JOIN reader_settings s ON s.device_id=d.id
+      LEFT JOIN venue_observed_devices o ON o.device_id=d.id ORDER BY d.id`).all().map(row => ({
       id: row.id, address: row.address, lastSeenAt: row.last_seen_at, machineState: JSON.parse(row.machine_state ?? 'null'),
       softwareVersion: JSON.parse(row.software_version ?? 'null'), hardwareVersion: JSON.parse(row.hardware_version ?? 'null'),
       lastRfid: JSON.parse(row.last_rfid ?? 'null'), snapshotCount: row.snapshot_count,
-      rfidBaselineEstablished: row.last_rfid !== null, name: row.name ?? row.id, configured: Boolean(row.configured),
+      rfidBaselineEstablished: row.observed !== null && row.last_rfid !== null && this.now() - Date.parse(row.last_seen_at) <= 25000,
+      name: row.name ?? row.id, configured: Boolean(row.configured),
       roomId: row.room_id ?? null, x: row.x ?? 20, y: row.y ?? 20, role: row.role ?? 'entry' }));
   }
 

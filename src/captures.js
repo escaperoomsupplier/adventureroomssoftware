@@ -6,7 +6,7 @@ export class CaptureStore {
   start(reader) {
     this.sweep();
     if (!reader?.configured) fail(409, 'Add this reader to the venue first.');
-    if (!reader.lastRfid || this.now() - Date.parse(reader.lastSeenAt) > 25000) {
+    if (!reader.rfidBaselineEstablished || !reader.lastRfid || this.now() - Date.parse(reader.lastSeenAt) > 25000) {
       fail(409, 'Reader has no recent RFID baseline. Wait for contact, remove the card and try again.');
     }
     if ([...this.items.values()].some(c => c.readerId === reader.id && c.status === 'waiting')) fail(409, 'This reader is already waiting for a card.');
@@ -40,7 +40,7 @@ export class CaptureStore {
       if (capture.status === 'waiting' && expiry <= this.now()) capture.status = 'expired';
       if (readers && capture.status === 'waiting') {
         const reader = readers.find(r => r.id === capture.readerId);
-        if (!reader?.configured || this.now() - Date.parse(reader.lastSeenAt) > 25000) capture.status = 'cancelled';
+        if (!reader?.configured || !reader.rfidBaselineEstablished || this.now() - Date.parse(reader.lastSeenAt) > 25000) capture.status = 'cancelled';
       }
       if (expiry + 60000 <= this.now()) this.items.delete(id);
     }

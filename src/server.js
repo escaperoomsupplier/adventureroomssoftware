@@ -120,6 +120,7 @@ export async function startServer({
         if (readerRoute?.[2] && req.method === 'POST') {
           const reader = venue.listReaders().find(r => r.id === readerRoute[1]);
           if (!reader) return json(res, 404, { error: 'Reader not found' });
+          if (!reader.rfidBaselineEstablished) return json(res, 409, { error: 'Wait for a fresh reader snapshot before capturing a card.' });
           return json(res, 201, { capture: captures.start(reader) });
         }
         if (captureRoute && req.method === 'DELETE') return json(res, 200, { capture: captures.cancel(captureRoute[1]) });
@@ -203,10 +204,12 @@ export async function startServer({
         let snapshot;
         try { snapshot = parseSnapshot(payload); }
         catch { return json(res, 400, { error: 'Invalid UUPC snapshot' }); }
-        captures.sweep(venue.listReaders());
+        const readersBeforeSnapshot = venue.listReaders();
+        captures.sweep(readersBeforeSnapshot);
+        const captureBaselineReady = readersBeforeSnapshot.find(reader => reader.id === snapshot.id)?.rfidBaselineEstablished === true;
         let capture = null;
         const recorded = store.recordSnapshot(snapshot, req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? 'unknown', data => {
-          capture = captures.match(data);
+          capture = captureBaselineReady ? captures.match(data) : null;
           venue.applySnapshot(capture ? { ...data, event: null } : data);
         });
         if (capture) captures.complete(capture, recorded.event.uid);
@@ -264,7 +267,7 @@ export async function startServer({
     if (discovery) {
       discoveryHandle = await startDiscovery({ ...discoveryOptions,
         onDevice: device => {
-          try { venue.reconcile(); store.recordDiscovery(device); publish(); }
+          try { venue.reconcile(); captures.sweep(venue.listReaders()); store.recordDiscovery(device); publish(); }
           catch (error) { logger.error('Discovery storage failed:', error.message); }
         },
         onError: error => { discoveryError = error.message; logger.error('UDP discovery:', error.message); publish(); },
