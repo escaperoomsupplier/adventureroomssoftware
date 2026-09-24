@@ -23,4 +23,19 @@
 #rc-error { color:#9f4f32; background:#fff3ee; border:1px solid #efd8ce; padding:13px 16px; border-radius:8px; font-size:12px; line-height:1.7; }
 #rc-message { color:#177261; font-size:12px; }
 #rc-message:empty { display:none; }
+.rc-team-tabs { display:flex; gap:10px; margin-top:24px; flex-wrap:wrap; }
+.rc-team-tabs button { display:flex; gap:10px; align-items:center; }
+.rc-team-tabs span { padding:2px 7px; border-radius:12px; background:rgba(128,128,128,.14); font-size:12px; }
+.rc-history-filters { display:flex; gap:16px; margin-bottom:16px; flex-wrap:wrap; }
+.rc-history-filters label { display:grid; gap:7px; font-size:12px; color:#43596b; }
+.rc-history-filters input,.rc-history-filters select { min-height:40px; padding:8px 12px; border:1px solid #d6e0e7; border-radius:7px; background:white; color:#192b3e; }
+.rc-history-filters input { width:min(340px,80vw); }
+#rc-teams.rc-history-list { display:block; overflow:auto; border-radius:10px; }
+.rc-history-list table { background:white; width:100%; }
+.rc-history-list td:first-child { font-weight:600; overflow-wrap:anywhere; }
+.rc-history-list button { white-space:nowrap; padding:7px 12px; font-size:12px; }
+.rc-history-pages { display:flex; gap:16px; justify-content:center; align-items:center; margin:18px 0; font-size:12px; color:#687b8e; }
+.rc-history-details { margin-top:20px; }
+.rc-history-details button { margin-top:0; }
+#rc-history-content { overflow:auto; margin-top:16px; }
 @media(max-width:800px) { .rc-layout { grid-template-columns:1fr; } .rc-section-heading { align-items:flex-start; flex-direction:column; } #rc-teams { grid-template-columns:1fr; } }

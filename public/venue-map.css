@@ -23,3 +23,8 @@
 .vm-reader-dialog .vm-reader-list button { width:100%; }
 .vm-placement-ghost { opacity:.7; pointer-events:none; }
 .vm-block .vm-item-icon { width:13px; height:13px; }
+.vm-tool-button { display:inline-flex; align-items:center; gap:8px; }
+.vm-name-dialog label { display:grid; gap:8px; font-size:13px; font-weight:600; }
+.vm-name-dialog input { width:100%; padding:11px; border:1px solid #cbd9e0; border-radius:7px; color:#203a4c; background:#fff; font:inherit; }
+.vm-name-dialog form>button { margin-right:8px; }
+.vm-ghost-room-name { fill:#243c50; font-size:16px; font-weight:600; }

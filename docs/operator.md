@@ -7,8 +7,10 @@ Configuration and team actions send no commands to physical hardware.
 
 ## Navigation
 
-- **Overview** (`/`): interactive venue map, teams and selectable visit histories.
+- **Overview** (`/`): interactive venue map, waiting/playing teams and their visit histories.
 - **Reception** (`/reception`): prepare teams, assign wristbands, start and finish games.
+  Current teams contains waiting and playing teams. History contains finished,
+  expired and cancelled sessions, with name search, status filters and 15 per page.
 - **Leaderboard** (`/leaderboard`): completed games ordered by total elapsed time.
 - **Screen settings** (`/screen-settings`): defaults, media and screen automation. Displays open `/screens` to choose their player.
 - **Diagnostics** (`/devices`): readers, selectable details and the latest 15 RFID events.
@@ -20,7 +22,8 @@ before relying on it. Reconnection refreshes the current view.
 
 ## Set up the venue
 
-1. Unlock the map and choose **Add room**. Enter its name and save.
+1. Unlock the map and choose **Add room**. Enter its name in the dialog, confirm,
+   then click the map to place it. Escape or a click outside the map cancels.
 2. Drag its rectangle to move it. Drag any edge to resize. Drag empty space to pan,
    use the mouse wheel to zoom, or press **Fit view** to see the layout.
 3. Choose **Add reader**, select an online reader, then click a room to place and
@@ -28,8 +31,9 @@ before relying on it. Reconnection refreshes the current view.
    give it a friendly name and choose its role.
 4. Move reader blocks within or between rooms. The room inspector lists its readers
    and screens. Positions are saved locally; multiple readers can share a room.
-5. Use **Add screen** for a display block. Assign its room and open **Screen settings**
-   from its inspector to configure background, music and team timers.
+5. Use **Add screen**, enter its name, then click the map to place it. Clicking a
+   room assigns the screen to it; empty map space leaves it unassigned. Open
+   **Screen settings** from its inspector to configure background, music and timers.
 6. Lock the map when finished. It fits the venue automatically. Select items to
    inspect them; click empty space to clear selection. Clicking a locked edit field
    highlights the lock control.

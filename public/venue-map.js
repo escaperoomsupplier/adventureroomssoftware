@@ -33,9 +33,15 @@ const lockPath = svgNode('path'); lockIcon.append(lockPath, svgNode('rect', { x:
 const lockLabel = node('span'); lockButton.append(lockIcon, lockLabel); header.append(node('h2', 'Venue map'), lockButton);
 const toolbar = node('div', undefined, 'vm-toolbar');
 const fitButton = button('Fit view', () => { fit(); draw(true); });
-const addRoom = button('Add room', () => { if (locked) return flashLock(); select('room', null); });
-const addScreen = button('Add screen', () => { if (locked) return flashLock(); select('screen', null); });
+const addRoom = button('Add room', () => openNameDialog('room'));
+const addScreen = button('Add screen', () => openNameDialog('screen'));
 const addReader = button('Add reader', () => { if(locked)return flashLock(); if(!canEdit())return; cancelGesture(); cancelPlacement(); listSignature=''; listReaders(); readerDialog.showModal(); readerList.querySelector('button')?.focus(); });
+for(const [control,kind] of [[fitButton,'fit'],[addRoom,'room'],[addReader,'reader'],[addScreen,'screen']]){
+  const label=node('span',control.textContent),icon=kind==='reader'||kind==='screen'?itemIcon(kind):svgNode('svg',{viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':1.7,'aria-hidden':'true',class:'vm-item-icon'});
+  if(kind==='fit')icon.append(svgNode('path',{d:'M9 3H3v6M15 3h6v6M3 15v6h6M21 15v6h-6M8 8h8v8H8z'}));
+  if(kind==='room')icon.append(svgNode('path',{d:'M4 21V4l12-2v19M2 21h20M16 6h4v15M12 12v2'}));
+  control.replaceChildren(icon,label);control.classList.add('vm-tool-button');
+}
 const status = node('span', '', 'vm-status'); status.setAttribute('role', 'status'); toolbar.append(fitButton, addRoom, addReader, addScreen, status);
 const error = node('p', '', 'vm-error'); error.setAttribute('role', 'alert'); error.hidden = true;
 const layout = node('div', undefined, 'vm-layout');
@@ -43,8 +49,16 @@ const canvas = svgNode('svg', { class: 'vm-canvas', tabindex: '0', 'aria-label':
 const readerDialog=node('dialog',undefined,'vm-reader-dialog');readerDialog.setAttribute('aria-label','Choose an online reader');
 readerDialog.append(node('h3','Choose an online reader'),node('p','Select a reader, then click a room on the map. Click outside a room or press Escape to cancel.','vm-help'));
 const readerList=node('div',undefined,'vm-reader-list');readerDialog.append(readerList,button('Cancel',()=>readerDialog.close()));
+const nameDialog=node('dialog',undefined,'vm-reader-dialog vm-name-dialog');
+const nameTitle=node('h3');nameTitle.id='vm-create-title';nameDialog.setAttribute('aria-labelledby',nameTitle.id);
+const nameForm=node('form'),nameLabel=node('label','Name'),nameInput=node('input');nameInput.required=true;nameInput.maxLength=80;nameInput.autocomplete='off';nameLabel.append(nameInput);
+const nameHint=node('p','Choose a name, then click the map to place it. Nothing is saved until placement.','vm-help');
+const nameContinue=node('button','Continue');nameContinue.type='submit';const nameCancel=button('Cancel',()=>nameDialog.close());
+nameForm.append(nameLabel,nameHint,nameContinue,nameCancel);nameDialog.append(nameTitle,nameForm);let creatingType='room';
+nameForm.addEventListener('submit',e=>{e.preventDefault();if(!canEdit())return;const name=nameInput.value.trim();if(!name){nameInput.focus();return;}nameDialog.close();placement={type:creatingType,name,point:null};canvas.focus();syncControls();draw(true);});
+function openNameDialog(type){if(locked)return flashLock();if(!canEdit())return;cancelGesture();cancelPlacement();creatingType=type;nameTitle.textContent=type==='room'?'Add room':'Add screen';nameInput.value='';nameDialog.showModal();nameInput.focus();}
 const inspector = node('section', undefined, 'vm-inspector'); inspector.setAttribute('aria-label', 'Selected item details');
-layout.append(canvas); shell.append(header, toolbar, error, layout, inspector, readerDialog); mount.append(shell);
+layout.append(canvas); shell.append(header, toolbar, error, layout, inspector, readerDialog, nameDialog); mount.append(shell);
 
 function flashLock() {
   clearTimeout(flashTimer); lockButton.classList.remove('vm-flash');
@@ -56,7 +70,7 @@ function syncControls() {
   lockPath.setAttribute('d', locked ? 'M8 10V7a4 4 0 0 1 8 0v3' : 'M8 10V7a4 4 0 0 1 7.5-2');
   lockButton.setAttribute('aria-pressed', String(locked));
   lockButton.setAttribute('aria-label', locked ? 'Unlock map editing' : 'Lock map and fit all rooms');
-  status.textContent = !connected ? 'Disconnected' : pending ? 'Saving…' : placement ? 'Click a room to place the reader. Escape cancels.' : '';
+  status.textContent = !connected ? 'Disconnected' : pending ? 'Saving…' : placement ? (placement.type==='reader'?'Click a room to place the reader. Escape cancels.':`Click the map to place the ${placement.type}. Escape cancels.`) : '';
   addRoom.disabled = addReader.disabled = addScreen.disabled = !connected || pending;
   for (const control of inspector.querySelectorAll('input,select,button[data-save]')) {
     control.disabled = !connected || pending;
@@ -169,18 +183,24 @@ function draw(force = false) {
     const title = svgNode('title'); title.textContent = item.name || item.id; g.append(title);
     g.addEventListener('pointerdown', e => begin(e, type, original)); canvas.append(g);
   }
-  if(placement?.point){const p=placement.point,reader=itemFor('reader',placement.id);const ghost=svgNode('g',{class:'vm-block vm-reader vm-placement-ghost'});ghost.append(svgNode('rect',{x:p.x,y:p.y,width:116,height:42,rx:6}));const text=svgNode('text',{x:p.x+9,y:p.y+17});text.textContent=(reader?.name || 'Reader').slice(0,14);ghost.append(text);const icon=itemIcon('reader');for(const [key,value] of Object.entries({x:p.x+96,y:p.y+26,width:13,height:13}))icon.setAttribute(key,value);ghost.append(icon,svgNode('circle',{cx:p.x+106,cy:p.y+11,r:3.5,class:'vm-contact-dot vm-contact-online'}));canvas.append(ghost);}
+  if(placement?.point){
+    const p=placement.point,type=placement.type,item=type==='reader'?itemFor(type,placement.id):placement,isRoom=type==='room';
+    const ghost=svgNode('g',{class:`${isRoom?'vm-room':'vm-block vm-'+type} vm-placement-ghost`});ghost.append(svgNode('rect',{x:snap(p.x),y:snap(p.y),width:isRoom?320:116,height:isRoom?220:42,rx:6}));
+    const text=svgNode('text',{x:snap(p.x)+9,y:snap(p.y)+17,class:isRoom?'vm-ghost-room-name':''});text.textContent=(item?.name || 'Reader').slice(0,isRoom?35:14);ghost.append(text);
+    if(!isRoom){const icon=itemIcon(type);for(const [key,value] of Object.entries({x:snap(p.x)+96,y:snap(p.y)+26,width:13,height:13}))icon.setAttribute(key,value);ghost.append(icon,svgNode('circle',{cx:snap(p.x)+106,cy:snap(p.y)+11,r:3.5,class:`vm-contact-dot ${type==='reader'?'vm-contact-online':'vm-contact-offline'}`}));}
+    canvas.append(ghost);
+  }
   if (focusKey) [...canvas.querySelectorAll('[data-key]')].find(e => e.dataset.key === focusKey)?.focus({ preventScroll: true });
 }
 function listReaders() {
   const available=readers.filter(reader=>online('reader',reader));
   const next=JSON.stringify(available.map(reader=>[reader.id,reader.name]));if(next===listSignature)return;listSignature=next;
   const focused=document.activeElement?.dataset.readerId;readerList.replaceChildren();
-  for(const reader of available){const b=decorateButton(button('',()=>{if(!canEdit() || !online('reader',reader))return;readerDialog.close();placement={id:reader.id,point:null};canvas.focus();syncControls();draw(true);}), 'reader',reader);b.dataset.readerId=reader.id;readerList.append(b);}
+  for(const reader of available){const b=decorateButton(button('',()=>{const current=itemFor('reader',reader.id);if(!canEdit() || !current || !online('reader',current))return;readerDialog.close();placement={type:'reader',id:current.id,point:null};canvas.focus();syncControls();draw(true);}), 'reader',reader);b.dataset.readerId=reader.id;readerList.append(b);}
   if(!available.length)readerList.append(node('p','No online readers available.','vm-help'));
   if(focused)[...readerList.querySelectorAll('button')].find(b=>b.dataset.readerId===focused)?.focus({preventScroll:true});
 }
-function cancelPlacement(){placement=null;if(readerDialog.open)readerDialog.close();syncControls();draw(true);}
+function cancelPlacement(){placement=null;if(readerDialog.open)readerDialog.close();if(nameDialog.open)nameDialog.close();syncControls();draw(true);}
 function field(form, title, value, choices) {
   const wrapper = node('label', title), input = node(choices ? 'select' : 'input');
   if (choices) for (const [id, text] of choices) input.append(new Option(text, id));
@@ -327,11 +347,11 @@ canvas.addEventListener('drop',async e=>{
 export function updateVenueMap(state={}) {
   if(state.rooms)rooms=state.rooms;if(state.readers)readers=state.readers;if(state.screens)screens=state.screens;if(state.sessions)sessions=state.sessions;
   connected=state.connected ?? connected;if(!connected && gesture)cancelGesture();
-  if(placement && (!canEdit() || !online('reader',itemFor('reader',placement.id) || {})))cancelPlacement();
-  if(!connected && readerDialog.open)readerDialog.close();
+  if(placement && (!canEdit() || placement.type==='reader' && !online('reader',itemFor('reader',placement.id) || {})))cancelPlacement();
+  if(!connected){if(readerDialog.open)readerDialog.close();if(nameDialog.open)nameDialog.close();}
   if(locked)fit();listReaders();syncControls();refreshAssigned();draw();
 }
-setInterval(()=>{if(placement && !online('reader',itemFor('reader',placement.id) || {}))cancelPlacement();if(!gesture){listReaders();refreshAssigned();draw();}},1000);syncControls();draw(true);
+setInterval(()=>{if(placement?.type==='reader' && !online('reader',itemFor('reader',placement.id) || {}))cancelPlacement();if(!gesture){listReaders();refreshAssigned();draw();}},1000);syncControls();draw(true);
 
 
 
@@ -339,7 +359,13 @@ setInterval(()=>{if(placement && !online('reader',itemFor('reader',placement.id)
 document.addEventListener('keydown',e=>{if(e.key==='Escape' && placement){e.preventDefault();cancelPlacement();}},true);
 document.addEventListener('click',async e=>{
   if(!placement || e.button!==0)return;e.preventDefault();e.stopImmediatePropagation();
-  const chosen=placement,reader=itemFor('reader',chosen.id),p=canvas.contains(e.target)?point(e):null,room=p?roomAt(p):null;
-  cancelPlacement();if(!room || !canEdit() || !reader || !online('reader',reader))return;
-  const saved=await persist('reader',reader.id,{configured:true,name:reader.name || reader.id,role:reader.role || 'entry',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))});if(saved)select('reader',saved.id);
+  const chosen=placement,p=canvas.contains(e.target)?point(e):null,room=p?roomAt(p):null;
+  cancelPlacement();if(!p || !canEdit())return;
+  let patch,id=null;
+  if(chosen.type==='reader'){
+    const reader=itemFor('reader',chosen.id);if(!room || !reader || !online('reader',reader))return;id=reader.id;
+    patch={configured:true,name:reader.name || reader.id,role:reader.role || 'entry',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))};
+  }else if(chosen.type==='room')patch={name:chosen.name,x:clamp(snap(p.x),-10000,10000),y:clamp(snap(p.y),-10000,10000),width:320,height:220};
+  else patch={name:chosen.name,roomId:room?.id || null,x:room?clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)):clamp(snap(p.x),-10000,10000),y:room?clamp(snap(p.y-room.y),0,Math.max(0,room.height-42)):clamp(snap(p.y),-10000,10000)};
+  const saved=await persist(chosen.type,id,patch);if(saved)select(chosen.type,saved.id);
 },true);
