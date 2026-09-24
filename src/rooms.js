@@ -13,6 +13,10 @@ export class RoomStore {
       enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );`);
+    const columns = new Set(db.prepare('PRAGMA table_info(rooms)').all().map(c => c.name));
+    for (const [key, value] of Object.entries({ x: 0, y: 0, width: 240, height: 160 })) {
+      if (!columns.has(key)) db.exec(`ALTER TABLE rooms ADD COLUMN ${key} INTEGER NOT NULL DEFAULT ${value}`);
+    }
   }
 
   createRoom(input) {
@@ -21,19 +25,22 @@ export class RoomStore {
       this.#checkDevice(values.deviceId);
       const id = randomUUID();
       const time = new Date().toISOString();
-      this.db.prepare(`INSERT INTO rooms(id,name,device_id,enabled,created_at,updated_at)
-        VALUES(?,?,?,?,?,?)`).run(id, values.name, values.deviceId, Number(values.enabled), time, time);
+      this.db.prepare(`INSERT INTO rooms(id,name,device_id,enabled,created_at,updated_at,x,y,width,height)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(id, values.name, values.deviceId, Number(values.enabled), time, time, values.x, values.y, values.width, values.height);
       return this.getRoom(id);
     });
   }
 
   updateRoom(id, input) {
-    const values = this.#validate(input, false);
     return this.#transaction(() => {
-      this.getRoom(id);
+      if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Invalid room update.');
+      const values = this.#validate({ ...this.getRoom(id), ...input }, false);
       this.#checkDevice(values.deviceId, id);
-      this.db.prepare('UPDATE rooms SET name=?,device_id=?,enabled=?,updated_at=? WHERE id=?')
-        .run(values.name, values.deviceId, Number(values.enabled), new Date().toISOString(), id);
+      this.db.prepare('UPDATE rooms SET name=?,device_id=?,enabled=?,updated_at=?,x=?,y=?,width=?,height=? WHERE id=?')
+        .run(values.name, values.deviceId, Number(values.enabled), new Date().toISOString(), values.x, values.y, values.width, values.height, id);
+      if (this.db.prepare("SELECT name FROM sqlite_master WHERE name='reader_settings'").get()) {
+        this.db.prepare('UPDATE reader_settings SET x=MIN(x,?),y=MIN(y,?) WHERE room_id=?').run(values.width, values.height, id);
+      }
       return this.getRoom(id);
     });
   }
@@ -59,7 +66,13 @@ export class RoomStore {
       fail(400, 'Controller ID must contain exactly 14 ASCII letters, digits, underscores or hyphens.');
     }
     if (typeof enabled !== 'boolean') fail(400, 'Enabled must be a boolean.');
-    return { name: input.name.trim(), deviceId, enabled };
+    const geometry = {};
+    for (const [key, [fallback, min, max]] of Object.entries({ x: [0,0,10000], y: [0,0,10000], width: [240,120,2000], height: [160,80,2000] })) {
+      const value = defaults && input[key] === undefined ? fallback : input[key];
+      if (!Number.isInteger(value) || value < min || value > max) fail(400, `Invalid room ${key}.`);
+      geometry[key] = value;
+    }
+    return { name: input.name.trim(), deviceId, enabled, ...geometry };
   }
 
   #checkDevice(deviceId, roomId = null) {
@@ -71,17 +84,17 @@ export class RoomStore {
 
   #room(row) {
     return { id: row.id, name: row.name, deviceId: row.device_id, enabled: Boolean(row.enabled),
-      createdAt: row.created_at, updatedAt: row.updated_at };
+      createdAt: row.created_at, updatedAt: row.updated_at, x: row.x, y: row.y, width: row.width, height: row.height };
   }
 
   #transaction(action) {
-    this.db.exec('BEGIN IMMEDIATE');
+    this.db.exec('SAVEPOINT room_change');
     try {
       const result = action();
-      this.db.exec('COMMIT');
+      this.db.exec('RELEASE room_change');
       return result;
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      this.db.exec('ROLLBACK TO room_change; RELEASE room_change');
       throw error;
     }
   }

@@ -1,63 +1,30 @@
-let state = { devices: [], sessions: [], rooms: [], rounds: [], scans: [] };
-let connected = false;
-let signature = '';
-const $ = id => document.getElementById(id);
-const node = (tag, text, className) => {
-  const element = document.createElement(tag);
-  if (text !== undefined) element.textContent = text;
-  if (className) element.className = className;
-  return element;
-};
-const recent = device => device && Number.isFinite(Date.parse(device.lastSeenAt)) && Date.now() - Date.parse(device.lastSeenAt) <= 25000;
-
-function render() {
-  const { devices, sessions, rooms, rounds, scans } = state;
-  $('overview-sessions').textContent = connected ? sessions.filter(s => s.status === 'active' && Date.parse(s.endsAt) > Date.now()).length : '—';
-  $('overview-rounds').textContent = connected ? rounds.filter(r => r.status === 'tracking').length : '—';
-  $('overview-rooms').textContent = connected ? rooms.filter(r => r.enabled).length : '—';
-  $('overview-devices').textContent = connected ? devices.filter(recent).length : '—';
-  const next = JSON.stringify([rooms, rounds, scans.slice(0, 5), devices.map(d => [d.id, recent(d)]), connected]);
-  if (next === signature) return;
-  signature = next;
-  const roomList = $('overview-room-list');
-  roomList.replaceChildren();
-  for (const room of rooms.slice(0, 6)) {
-    const device = devices.find(d => d.id === room.deviceId);
-    const round = rounds.find(r => r.roomId === room.id && r.status === 'tracking');
-    const card = node('article', undefined, 'overview-room');
-    const status = !connected ? 'Status unavailable' : !room.enabled ? 'Disabled' : !device ? 'No controller' : !recent(device) ? 'No recent contact' : round ? 'Tracking a team' : 'Connected';
-    const tone = !connected || !room.enabled ? 'muted' : !device || !recent(device) ? 'warning' : 'positive';
-    card.append(node('span', status, `status-pill ${tone}`), node('h3', room.name),
-      node('p', round ? round.teamName : 'No tracked team', 'field-hint'));
-    const link = node('a', round ? 'View round →' : 'Room settings →', 'text-link');
-    link.href = round ? '/rounds' : '/rooms';
-    card.append(link);
-    roomList.append(card);
+import { node, time, duration, table } from './ui.js';
+let sessions = [], connected = false, signature = '', selected = null, historyGeneration = 0, selectedVersion = '';
+const container = document.getElementById('team-overview'), history = document.getElementById('team-history');
+const statuses = { pending:'Pending', active:'Active', finished:'Finished', expired:'Expired', cancelled:'Cancelled', ended:'Finished' };
+function timers() {
+  for (const cell of container.querySelectorAll('[data-timer]')) {
+    const team = sessions.find(s => s.id === cell.dataset.timer); if (!team) continue;
+    cell.textContent = !connected ? 'Unavailable while disconnected' : team.status === 'pending' ? `${duration(team.durationMinutes * 60000)} available` : team.status === 'active' ? `${duration(Date.parse(team.endsAt) - Date.now())} remaining` : `${duration(team.elapsedMs)} elapsed`;
   }
-  if (rooms.length > 6) roomList.append(node('p', `Showing 6 of ${rooms.length} rooms. Open Rooms to see all spaces.`, 'field-hint'));
-  if (!rooms.length) {
-    const empty = node('div', undefined, 'empty-state');
-    empty.append(node('h3', 'Make room for adventure'), node('p', 'Add your first room and connect its UUPC to see it here.', 'field-hint'));
-    const link = node('a', 'Set up a room →', 'text-link');
-    link.href = '/rooms';
-    empty.append(link);
-    roomList.append(empty);
-  }
-  const activity = $('overview-activity');
-  activity.replaceChildren();
-  for (const scan of scans.slice(0, 5)) {
-    const item = node('div', undefined, 'activity-item');
-    item.append(node('span', scan.decision === 'accepted' ? 'Accepted' : scan.decision === 'ignored' ? 'Repeated tap' : 'Rejected scan', `status-pill ${scan.decision === 'accepted' ? 'positive' : 'muted'}`),
-      node('strong', scan.teamName || 'Unassigned card'), node('p', scan.roomName || scan.deviceId, 'field-hint'),
-      node('time', new Date(scan.receivedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })));
-    activity.append(item);
-  }
-  if (!scans.length) activity.append(node('p', 'Card activity will appear here when players tap in.', 'empty'));
 }
-
-export function updateOverview(next) {
-  connected = next.connected ?? connected;
-  state = { ...state, ...next };
-  render();
+async function showHistory(team) {
+  selected = team.id; selectedVersion = JSON.stringify([team.currentRoomId, team.status]); const generation = ++historyGeneration; history.hidden = false; history.replaceChildren();
+  const heading = node('div', undefined, 'wf-heading'); heading.append(node('h2', `${team.teamName} · History`));
+  const close = node('button', 'Close', 'secondary'); close.type='button'; close.addEventListener('click', () => { selected=null; historyGeneration++; history.hidden=true; }); heading.append(close); history.append(heading);
+  const content = node('div', undefined, 'table-wrap'); content.append(node('p','Loading visits…','empty')); history.append(content);
+  try { const response = await fetch(`/api/reception/sessions/${encodeURIComponent(team.id)}/history`, { signal:AbortSignal.timeout(10000), cache:'no-store' }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not load team history.'); if (generation !== historyGeneration) return;
+    table(content,['Room','Entered','Reader'],(data.visits || []).map(visit => [visit.roomName, time(visit.enteredAt), visit.readerName || '—']), 'No room visits yet.');
+  } catch(error) { if(generation === historyGeneration) { content.replaceChildren(node('p', error.message, 'wf-error')); content.setAttribute('role','alert'); } }
 }
-setInterval(render, 1000);
+export function updateOverview(state = {}) {
+  if(state.sessions) sessions=state.sessions; connected=state.connected ?? connected;
+  const selectedTeam = sessions.find(team => team.id === selected);
+  if (connected && selectedTeam && JSON.stringify([selectedTeam.currentRoomId, selectedTeam.status]) !== selectedVersion) showHistory(selectedTeam);
+  const next=JSON.stringify([sessions.map(({ elapsedMs, ...team }) => team),connected]); if(next === signature) { timers(); return; } signature=next;
+  const focused=document.activeElement?.dataset.history;
+  table(container,['Team','Status','Time','Current room','Wristbands',''],sessions.map(team => { const timer=node('span'); timer.dataset.timer=team.id; const button=node('button','History','secondary'); button.type='button'; button.dataset.history=team.id; button.disabled=!connected; button.addEventListener('click',()=>showHistory(team)); return [team.teamName,node('span',statuses[team.status] || team.status,`status-pill ${team.status === 'active' ? 'positive':'muted'}`),timer,team.currentRoomName || '—',(team.cards || []).length,button]; }), 'No teams yet. Add a team at Reception.');
+  if(focused) [...container.querySelectorAll('button')].find(b=>b.dataset.history===focused)?.focus(); timers();
+  if(!connected && selected) { history.hidden=true; selected=null; historyGeneration++; }
+}
+setInterval(timers,1000);

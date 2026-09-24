@@ -7,17 +7,18 @@ import { parseSnapshot } from './protocol.js';
 import { startDiscovery } from './discovery.js';
 import { ReceptionStore } from './reception.js';
 import { RoomStore } from './rooms.js';
-import { RoundStore } from './rounds.js';
+import { VenueStore } from './venue.js';
+import { CaptureStore } from './captures.js';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
-  ...['/reception', '/rounds', '/rooms', '/devices'].map(path => [path, ['index.html', 'text/html; charset=utf-8']]),
+  ...['/reception', '/leaderboard', '/devices'].map(path => [path, ['index.html', 'text/html; charset=utf-8']]),
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/reception.js', ['reception.js', 'text/javascript; charset=utf-8']],
-  ['/rooms.js', ['rooms.js', 'text/javascript; charset=utf-8']],
-  ['/rounds.js', ['rounds.js', 'text/javascript; charset=utf-8']],
+  ...['venue-map', 'reception', 'workflow'].map(name => [`/${name}.css`, [`${name}.css`, 'text/css; charset=utf-8']]),
+  ...['venue-map', 'leaderboard', 'ui'].map(name => [`/${name}.js`, [`${name}.js`, 'text/javascript; charset=utf-8']]),
   ['/navigation.js', ['navigation.js', 'text/javascript; charset=utf-8']],
   ['/overview.js', ['overview.js', 'text/javascript; charset=utf-8']],
 ]);
@@ -56,13 +57,14 @@ export async function startServer({
   const store = new DeviceStore(databasePath);
   const reception = new ReceptionStore(store.db);
   const rooms = new RoomStore(store.db);
-  const rounds = new RoundStore(store.db);
+  const venue = new VenueStore(store.db);
+  const captures = new CaptureStore();
   let discoveryHandle;
   let discoveryError = null;
   const subscribers = new Set();
   const health = () => ({ status: 'ok', local: true, transport: 'http-ercc',
     discovery: discovery ? (discoveryError ? 'degraded' : 'active') : 'disabled', discoveryError });
-  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: store.listDevices(), events: store.listEvents(100), sessions: reception.listSessions(), rooms: rooms.listRooms(), rounds: rounds.listRounds(), scans: rounds.listScans() })}\n\n`;
+  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: venue.listReaders(), readers: venue.listReaders(), events: store.listEvents(15), sessions: reception.listSessions(), rooms: rooms.listRooms(), leaderboard: venue.listLeaderboard() })}\n\n`;
   const sendFrame = (res, frame) => {
     // Disconnect slow readers instead of allowing an unbounded outgoing queue.
     if (res.destroyed || res.writableLength > 256 * 1024) {
@@ -81,32 +83,51 @@ export async function startServer({
     for (const res of subscribers) sendFrame(res, ': keep-alive\n\n');
   }, 15000);
   heartbeat.unref();
-  // Expired sessions and stale controllers must release tracking without new POSTs.
+  // Session expiry and reader recovery are maintained even without an open panel.
   const reconciliation = setInterval(() => {
-    try { if (rounds.reconcile()) publish(); }
-    catch (error) { logger.error('Round reconciliation failed:', error.message); }
+    try { captures.sweep(venue.listReaders()); if (venue.reconcile()) publish(); }
+    catch (error) { logger.error('Venue reconciliation failed:', error.message); }
   }, 1000);
   reconciliation.unref();
   const server = http.createServer(async (req, res) => {
     try {
       const pathname = new URL(req.url, 'http://localhost').pathname;
-      if (pathname === '/api/rounds' && req.method === 'GET') {
-        return json(res, 200, { rounds: rounds.listRounds(), scans: rounds.listScans() });
+      if (req.method === 'GET' && ['/rooms', '/rounds'].includes(pathname)) {
+        res.writeHead(302, { Location: pathname === '/rounds' ? '/leaderboard' : '/' });
+        return res.end();
       }
-      const closeRoute = /^\/api\/rounds\/([A-Za-z0-9-]{1,80})\/close$/.exec(pathname);
-      if (closeRoute && req.method === 'POST') {
-        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
-          return json(res, 403, { error: 'Cross-origin round changes are not allowed' });
+      if (pathname === '/api/readers' && req.method === 'GET') return json(res, 200, venue.listReaders());
+      if (pathname === '/api/leaderboard' && req.method === 'GET') return json(res, 200, venue.listLeaderboard());
+      const historyRoute = /^\/api\/reception\/sessions\/([A-Za-z0-9-]{1,80})\/history$/.exec(pathname);
+      if (historyRoute && req.method === 'GET') return json(res, 200, { visits: venue.getHistory(historyRoute[1]) });
+      const captureRoute = /^\/api\/captures\/([A-Za-z0-9-]{1,80})$/.exec(pathname);
+      if (captureRoute && req.method === 'GET') return json(res, 200, { capture: captures.get(captureRoute[1]) });
+      const readerRoute = /^\/api\/readers\/([A-Za-z0-9_-]{14})(\/capture)?$/.exec(pathname);
+      const resultRoute = /^\/api\/leaderboard\/([A-Za-z0-9-]{1,80})$/.exec(pathname);
+      if ((readerRoute && ['PATCH', 'POST'].includes(req.method)) || (captureRoute && req.method === 'DELETE') || (resultRoute && req.method === 'DELETE')) {
+        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin changes are not allowed' });
+        let body = {};
+        if (req.method !== 'DELETE') {
+          if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) return json(res, 415, { error: 'Expected application/json' });
+          body = await readJson(req);
+          if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Expected a JSON object' });
         }
-        if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) {
-          return json(res, 415, { error: 'Expected application/json' });
+        if (readerRoute && !readerRoute[2] && req.method === 'PATCH') {
+          const reader = venue.updateReader(readerRoute[1], body);
+          captures.sweep(venue.listReaders());
+          json(res, 200, { reader }); publish(); return;
         }
-        const body = await readJson(req);
-        if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Expected a JSON object' });
-        const round = rounds.closeRound(closeRoute[1]);
-        json(res, 200, { round });
-        publish();
-        return;
+        if (readerRoute?.[2] && req.method === 'POST') {
+          const reader = venue.listReaders().find(r => r.id === readerRoute[1]);
+          if (!reader) return json(res, 404, { error: 'Reader not found' });
+          if (!reader.rfidBaselineEstablished) return json(res, 409, { error: 'Wait for a fresh reader snapshot before capturing a card.' });
+          return json(res, 201, { capture: captures.start(reader) });
+        }
+        if (captureRoute && req.method === 'DELETE') return json(res, 200, { capture: captures.cancel(captureRoute[1]) });
+        if (resultRoute && req.method === 'DELETE') {
+          venue.deleteLeaderboard(resultRoute[1]); json(res, 200, { status: 'removed' }); publish(); return;
+        }
+        return json(res, 404, { error: 'Not found' });
       }
       if (pathname === '/api/rooms' && req.method === 'GET') return json(res, 200, rooms.listRooms());
       if ((pathname === '/api/rooms' || pathname.startsWith('/api/rooms/')) && ['POST', 'PATCH'].includes(req.method)) {
@@ -123,7 +144,7 @@ export async function startServer({
         if (pathname === '/api/rooms' && req.method === 'POST') room = rooms.createRoom(body);
         else if (route && req.method === 'PATCH') room = rooms.updateRoom(route[1], body);
         else return json(res, 404, { error: 'Not found' });
-        rounds.reconcile();
+        venue.reconcile();
         json(res, req.method === 'POST' ? 201 : 200, { room });
         publish();
         return;
@@ -148,7 +169,7 @@ export async function startServer({
         }
         let session;
         let status = 200;
-        const route = /^\/api\/reception\/sessions\/([A-Za-z0-9-]{1,80})\/(cards|end)(?:\/([A-Za-z0-9]{1,32}))?$/.exec(pathname);
+        const route = /^\/api\/reception\/sessions\/([A-Za-z0-9-]{1,80})\/(cards|start|end)(?:\/([A-Za-z0-9]{1,32}))?$/.exec(pathname);
         if (pathname === '/api/reception/sessions' && req.method === 'POST') {
           session = reception.createSession(body);
           status = 201;
@@ -156,10 +177,12 @@ export async function startServer({
           session = reception.assignCard(route[1], body.uid);
         } else if (route && route[2] === 'cards' && route[3] && req.method === 'DELETE') {
           session = reception.releaseCard(route[1], route[3]);
+        } else if (route && route[2] === 'start' && !route[3] && req.method === 'POST') {
+          session = reception.startSession(route[1]);
         } else if (route && route[2] === 'end' && !route[3] && req.method === 'POST') {
           session = reception.endSession(route[1]);
         } else return json(res, 404, { error: 'Not found' });
-        rounds.reconcile();
+        venue.reconcile();
         json(res, status, { session });
         publish();
         return;
@@ -181,8 +204,15 @@ export async function startServer({
         let snapshot;
         try { snapshot = parseSnapshot(payload); }
         catch { return json(res, 400, { error: 'Invalid UUPC snapshot' }); }
-        store.recordSnapshot(snapshot, req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? 'unknown',
-          recorded => rounds.applySnapshot(recorded));
+        const readersBeforeSnapshot = venue.listReaders();
+        captures.sweep(readersBeforeSnapshot);
+        const captureBaselineReady = readersBeforeSnapshot.find(reader => reader.id === snapshot.id)?.rfidBaselineEstablished === true;
+        let capture = null;
+        const recorded = store.recordSnapshot(snapshot, req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? 'unknown', data => {
+          capture = captureBaselineReady ? captures.match(data) : null;
+          venue.applySnapshot(capture ? { ...data, event: null } : data);
+        });
+        if (capture) captures.complete(capture, recorded.event.uid);
         // ACK only after SQLite commit. UUPC checks for literal "200 OK".
         json(res, 200, { status: 'ok' });
         publish();
@@ -207,8 +237,8 @@ export async function startServer({
       if (req.method === 'GET' && pathname === '/api/health') {
         return json(res, 200, health());
       }
-      if (req.method === 'GET' && pathname === '/api/devices') return json(res, 200, store.listDevices());
-      if (req.method === 'GET' && pathname === '/api/events') return json(res, 200, store.listEvents(100));
+      if (req.method === 'GET' && pathname === '/api/devices') return json(res, 200, venue.listReaders());
+      if (req.method === 'GET' && pathname === '/api/events') return json(res, 200, store.listEvents(15));
       if (req.method === 'GET' && assets.has(pathname)) {
         const [file, type] = assets.get(pathname);
         const content = await readFile(resolve(publicDir, file));
@@ -232,12 +262,12 @@ export async function startServer({
       server.once('error', reject);
       server.listen(port, host, () => { server.removeListener('error', reject); accept(); });
     });
-    // A failed second listener must not interrupt the running server's rounds.
-    rounds.reconcile({ restart: true });
+    // Establish runtime baselines only after this listener binds successfully.
+    venue.reconcile({ restart: true });
     if (discovery) {
       discoveryHandle = await startDiscovery({ ...discoveryOptions,
         onDevice: device => {
-          try { rounds.reconcile(); store.recordDiscovery(device); publish(); }
+          try { venue.reconcile(); captures.sweep(venue.listReaders()); store.recordDiscovery(device); publish(); }
           catch (error) { logger.error('Discovery storage failed:', error.message); }
         },
         onError: error => { discoveryError = error.message; logger.error('UDP discovery:', error.message); publish(); },
@@ -253,7 +283,7 @@ export async function startServer({
     throw error;
   }
   let closed = false;
-  return { server, store, reception, rooms, rounds, address: server.address(), async close() {
+  return { server, store, reception, rooms, venue, captures, address: server.address(), async close() {
     if (closed) return;
     closed = true;
     await discoveryHandle?.close();

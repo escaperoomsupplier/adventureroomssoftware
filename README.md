@@ -3,9 +3,7 @@
 The initial foundation includes ERCC-compatible UUPC discovery, an HTTP POST
 receiver, a local SQLite database, reception tools and a diagnostics panel. HTTP is the permanent
 transport. Runtime operation uses no MQTT, cloud services or external assets.
-One RFID reader per UUPC is assumed. Reception supports team sessions and RFID card
-assignments, room configuration and passive round tracking. This stage does not yet
-include scoring, lock control or an Electron installer.
+One physical RFID reader per UUPC is assumed; a room can contain several UUPC-backed readers. Reception prepares teams and wristbands, the interactive map configures rooms and reader roles, and completed games appear on an elapsed-time leaderboard. Hardware control and an Electron installer are not included.
 
 ## Running on Windows / macOS
 
@@ -104,65 +102,77 @@ as the main UUPC state.
 
 ## Reception
 
-Create a team session with a name and duration, select it, then assign one or more
-eight-character RFID UIDs. The interface offers 60, 90 and 120 minutes; the API
-accepts whole-minute durations from 1 to 720. A session starts when it is created.
-You can type a UID or explicitly copy the selected reader's last known UID. Check
-that the displayed card is the intended one before assigning it: a last reading
-is not proof that the card is still present.
+Create a team with a name and duration. Hours and minutes are entered separately,
+with a default of **1 hour, 0 minutes** and a total range of 1 minute to 12 hours.
+A new team is **pending**: its clock does not run until the operator presses
+**Start**, or its assigned card reaches a configured start reader.
 
-A card can belong to only one active, unexpired session. Release a card or end its
-session before reusing it, or reuse it after the session expires. Assignments are
-explicit: scanning a card does not automatically create or change a session.
-Session deadlines and assignment history persist in SQLite across restarts.
-The server enforces expiry even if no panel is open. These controls do not start
-a room, open a door or award points.
+To assign a wristband, select the team and a configured reader, press **Read card**,
+then remove and tap the card. Only a new placement after capture begins fills the
+UID field; a stored last reading is not silently reused. Review the UID and press
+**Assign card** to confirm. Manual entry of an eight-character hexadecimal UID is
+also supported. A team can have several wristbands. Pending and active teams
+reserve their cards; release a card before assigning it elsewhere.
 
-## Rooms
+Starting records the session deadline in SQLite. Finishing an active team records
+its total elapsed time and releases its cards. Cancelling a pending team produces
+no completed-game result. Expiry releases reservations but is not a successful
+finish. None of these actions starts a physical puzzle or opens a door.
 
-Create a room with a name, select a discovered controller or leave it unassigned,
-and save its enabled setting. Select an existing room to rename it, change its
-controller or disable it. Each controller can belong to at most one room, including
-disabled rooms. Select no controller and save to release an assignment for reuse.
-Room configuration persists in the local database and updates all open panels live.
+## Interactive venue map
 
-Enabled is an operator setting. Contact status and the last reported machine state
-are displayed separately; neither proves that a room is empty or ready for a team.
-Saving configuration sends no commands to hardware. RFID scans can register a team
-for software tracking; they do not start the hardware or award points.
+The top of **Overview** contains the venue map. It starts locked and automatically
+fits all rooms. Selection works while locked: select a rectangle, a reader marker,
+or a reader in the right-hand list to open its details below the map.
 
-## Round tracking
+Unlock editing to add rooms, drag rectangles, resize them using their corner
+handles, move reader markers, pan empty map space, or zoom. The details form also
+provides numeric position and size fields for keyboard operation. Locking returns
+to the automatic fit. Geometry and names are saved to the local server; unsaved
+form values are preserved during live updates.
 
-Assign a controller to an enabled room, create an active team session and assign
-its card. With the controller reporting **Armed (0)**, remove and tap the card again.
-A new, deduplicated placement registers that team in the room. Initial RFID
-baselines and repeated snapshots never register a team. A room and a team may each
-have only one tracked round at a time. The panel explains rejected scans, including
-unknown cards, inactive sessions, occupied tracking and controllers already in progress.
-The first HTTP snapshot after an application restart or a detected contact gap only
-restores the tracking baseline. Remove and tap the card again after reconnecting;
-a changed last-card value received during recovery is not proof of a fresh arrival.
+Discovered readers appear in the side list. Select one, give it a friendly name,
+choose a room and role, then use **Add reader**. A configured reader can be dragged
+from the list into a room or assigned through the details form. Multiple readers
+may belong to a room; each still represents one physical reader on its UUPC.
 
-Registration time measures time since receipt of the card tap, not a confirmed game
-start. The first later `0 → 1` transition records observed puzzle activity. A later
-`0 → 2` or `1 → 2` transition ends tracking as **Win reported**, once only. Simple
-puzzles can win without reporting state 1. A reset (`1 → 0`) is **Reset observed**,
-not a failure; programming mode is **Needs review**. Forced wins are indistinguishable
-from normal wins in firmware callbacks. The panel awards no points.
+Room colour describes contact only: green means all configured readers assigned
+to it were seen within 25 seconds, red means at least one is stale, and grey means
+no configured readers or a disabled room. These colours do not indicate occupancy,
+puzzle readiness or door state. Configuration sends no hardware commands.
 
-An application restart, more than 25 seconds without controller contact, or disabling
-or reassigning a room ends unfinished tracking as **Needs review**. Ending or expiring
-a team session closes its tracking. These checks run without browser activity.
-**Close tracking** ends only the software record; it does not stop, reset or release
-hardware. Releasing or reassigning a wristband does not transfer an existing round.
-Historical team and room names are preserved when settings later change.
+## Reader roles and team history
 
-Device snapshots, RFID events and tracking decisions commit in one SQLite transaction
-before HTTP acknowledgement. This prevents partial local writes, but cannot recover
-packets the firmware never delivered. UDP heartbeats indicate contact, not guaranteed
-HTTP delivery. Unobserved resets, short outages and reordered snapshots may still
-make attribution uncertain; this is an observation log, not authoritative game control.
+- **Entry** records the active team's arrival in the assigned enabled room.
+- **Start** starts a pending team's session and records its room arrival when assigned.
+- **Finish** finishes an active team's game and creates its elapsed-time result.
 
-Next steps: verified hardware round control and configurable scoring.
-Physical RFID communication has been verified. Before controlling games, verify
-round-control behavior and establish how round starts and results will be confirmed.
+Readers may be left unassigned to a room, for example a start or finish station.
+A disabled assigned room prevents that reader from processing team visits. The
+team's displayed room is its last recorded arrival, not a physical occupancy check.
+Repeated snapshots and additional scans within the same room do not add duplicate
+visits. Selecting a team on Overview displays its visit history.
+
+After server startup or a detected contact gap, the first snapshot restores the
+reader baseline. Remove and tap the card again before relying on a new visit,
+start or finish. Machine-state changes such as a puzzle win do not themselves
+finish a team's game or create a leaderboard result.
+
+## Leaderboard and diagnostics
+
+**Leaderboard** shows completed games ordered by total elapsed time, fastest first.
+This measures time from the team's start to its finish, rather than accumulated
+puzzle times or points. Removing a result hides it from the leaderboard while
+retaining the underlying result and team history in SQLite.
+
+**Diagnostics** provides a compact reader list, selectable device details and the
+latest 15 RFID events. Dates represent receipt at the server. Friendly names are
+configuration; hardware IDs remain available in details for identification.
+
+All panels share one SSE connection and receive committed snapshots. RFID events
+and their resulting team updates are committed atomically before acknowledging
+HTTP receipt. This protects local consistency but cannot reconstruct packets the
+firmware never delivered. UDP contact does not guarantee uninterrupted HTTP
+callbacks; unobserved resets, outages and reordered snapshots may make recorded
+visits incomplete. Hardware control requires separate verification of physical
+start, reset and result behaviour.
