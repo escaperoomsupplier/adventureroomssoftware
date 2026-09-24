@@ -20,7 +20,8 @@ test('creates sessions, normalizes names and cards, prevents conflicting assignm
   const first = store.createSession({ name: '  Team A  ', durationMinutes: 60 });
   const second = store.createSession({ name: 'Team B', durationMinutes: 90 });
   assert.equal(first.teamName, 'Team A');
-  assert.equal(first.endsAt, '2026-01-01T13:00:00.000Z');
+  assert.equal(first.endsAt, null);
+  assert.equal(first.status, 'pending');
   assert.deepEqual(store.listSessions().map(s => s.id), [second.id, first.id]);
   assert.deepEqual(store.assignCard(first.id, 'abcd1234').cards, ['ABCD1234']);
   store.assignCard(first.id, 'ABCD1234');
@@ -36,7 +37,7 @@ test('creates sessions, normalizes names and cards, prevents conflicting assignm
 
 test('expiry is immediate at deadline and expired cards can be reused with history', t => {
   const { store, db, advance } = setup(t);
-  const first = store.createSession({ name: 'First', durationMinutes: 1 });
+  const first = store.startSession(store.createSession({ name: 'First', durationMinutes: 1 }).id);
   store.assignCard(first.id, 'AABBCCDD');
   advance(59_999);
   assert.equal(store.getSession(first.id).status, 'active');
@@ -54,11 +55,11 @@ test('expiry is immediate at deadline and expired cards can be reused with histo
 
 test('ending releases every card atomically and is idempotent', t => {
   const { store, db, advance } = setup(t);
-  const first = store.createSession({ name: 'First', durationMinutes: 1 });
+  const first = store.startSession(store.createSession({ name: 'First', durationMinutes: 1 }).id);
   store.assignCard(first.id, 'AABBCCDD');
   store.assignCard(first.id, '12345678');
   const ended = store.endSession(first.id);
-  assert.equal(ended.status, 'ended');
+  assert.equal(ended.status, 'finished');
   assert.deepEqual(ended.cards, []);
   const before = db.prepare('SELECT ended_at FROM reception_sessions').get().ended_at;
   advance(5000);
@@ -93,7 +94,7 @@ test('bad input and missing sessions produce domain errors without changing data
 
 test('failed reassign and end writes roll back the whole transaction', t => {
   const { store, db, advance } = setup(t);
-  const first = store.createSession({ name: 'First', durationMinutes: 1 });
+  const first = store.startSession(store.createSession({ name: 'First', durationMinutes: 1 }).id);
   store.assignCard(first.id, 'AABBCCDD');
   advance(60_000);
   const second = store.createSession({ name: 'Second', durationMinutes: 1 });
@@ -104,9 +105,43 @@ test('failed reassign and end writes roll back the whole transaction', t => {
   db.exec(`DROP TRIGGER fail_assignment;
     CREATE TRIGGER fail_release BEFORE UPDATE ON reception_bindings
     BEGIN SELECT RAISE(ABORT, 'test release failure'); END;`);
+  advance(-60_000);
   assert.throws(() => store.endSession(first.id), /test release failure/);
-  assert.equal(store.getSession(first.id).status, 'expired');
+  assert.equal(store.getSession(first.id).status, 'active');
   assert.equal(db.prepare('SELECT ended_at FROM reception_sessions WHERE id=?').get(first.id).ended_at, null);
+});
+
+test('pending sessions do not consume time and manual start and finish are idempotent', t => {
+  const { store, db, advance } = setup(t);
+  const pending = store.createSession({ name: 'Team', durationMinutes: 1 });
+  advance(3_600_000);
+  assert.equal(store.getSession(pending.id).status, 'pending');
+  const started = store.startSession(pending.id);
+  advance(1000);
+  assert.equal(store.startSession(pending.id).startedAt, started.startedAt);
+  const finished = store.endSession(pending.id);
+  assert.equal(finished.elapsedMs, 1000);
+  assert.equal(finished.status, 'finished');
+  assert.deepEqual(store.endSession(pending.id), finished);
+  assert.throws(() => store.startSession(pending.id), status(409));
+  const cancelled = store.endSession(store.createSession({ name: 'Cancelled', durationMinutes: 1 }).id);
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(db.prepare('SELECT count(*) AS n FROM game_results').get().n, 1);
+});
+
+test('legacy sessions migrate without changing active timing or bindings', t => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  db.exec(`CREATE TABLE reception_sessions(id TEXT PRIMARY KEY,team_name TEXT NOT NULL,started_at INTEGER NOT NULL,ends_at INTEGER NOT NULL,ended_at INTEGER);
+    INSERT INTO reception_sessions VALUES('old','Legacy',1000,61000,NULL);`);
+  const store = new ReceptionStore(db, { now: () => 2000 });
+  assert.equal(store.getSession('old').status, 'active');
+  assert.equal(store.getSession('old').startedAt, new Date(1000).toISOString());
+  assert.equal(store.getSession('old').endsAt, new Date(61000).toISOString());
+  assert.equal(store.getSession('old').durationMinutes, 1);
+  store.assignCard('old', 'AABBCCDD');
+  const reopened = new ReceptionStore(db, { now: () => 3000 });
+  assert.deepEqual(reopened.getSession('old').cards, ['AABBCCDD']);
 });
 
 test('storage survives reopening and preserves assignment conflicts', () => {

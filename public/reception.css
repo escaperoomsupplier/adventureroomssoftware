@@ -1,0 +1,26 @@
+.rc-layout { display:grid; grid-template-columns:1fr 1fr; gap:22px; align-items:start; }
+.rc-panel { background:#fff; border:1px solid #e1e8ee; border-radius:12px; padding:24px; min-width:0; }
+.rc-panel h2 { margin:0 0 12px; }
+.rc-panel label { display:block; font-size:12px; font-weight:600; margin:18px 0 8px; color:#43596b; }
+.rc-panel input,.rc-panel select { width:100%; min-height:42px; border:1px solid #d6e0e7; border-radius:7px; padding:10px 12px; background:white; color:#192b3e; font:inherit; font-size:13px; }
+.rc-panel input:focus,.rc-panel select:focus { border-color:#087f79; }
+.rc-panel button { margin-top:12px; }
+.rc-duration { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.rc-hint { font-size:12px; color:#687b8e; line-height:1.7; overflow-wrap:anywhere; }
+.rc-actions { display:flex; flex-wrap:wrap; gap:9px; }
+.rc-section-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; margin:28px 0 16px; }
+#rc-teams { display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:16px; }
+.rc-team-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.rc-team-heading h3 { margin:0; overflow-wrap:anywhere; }
+.rc-status { border-radius:5px; padding:4px 8px; background:#edf2f5; color:#67798a; font-size:10px; font-weight:650; }
+.rc-status.rc-active { background:#e7f5ee; color:#27775d; }
+.rc-status.rc-pending { background:#fff2df; color:#94621d; }
+.rc-timer { font-size:15px; font-weight:600; font-variant-numeric:tabular-nums; color:#274d61; }
+.rc-card { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:10px 0; }
+.rc-card code { font-size:12px; background:#f1f5f7; padding:6px 8px; border-radius:5px; }
+.rc-card button { margin:0; padding:6px 10px; min-height:32px; font-size:11px; }
+.rc-empty { padding:30px; text-align:center; grid-column:1/-1; color:#687b8e; border:1px dashed #d5e0e6; border-radius:10px; font-size:13px; }
+#rc-error { color:#9f4f32; background:#fff3ee; border:1px solid #efd8ce; padding:13px 16px; border-radius:8px; font-size:12px; line-height:1.7; }
+#rc-message { color:#177261; font-size:12px; }
+#rc-message:empty { display:none; }
+@media(max-width:800px) { .rc-layout { grid-template-columns:1fr; } .rc-section-heading { align-items:flex-start; flex-direction:column; } #rc-teams { grid-template-columns:1fr; } }

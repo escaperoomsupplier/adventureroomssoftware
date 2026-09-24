@@ -59,11 +59,22 @@ test('invalid names, IDs, booleans and unknown controllers leave persisted data 
   }
   assert.deepEqual(rooms.listRooms(), []);
   const room = rooms.createRoom({ name: 'Room', deviceId });
-  assert.throws(() => rooms.updateRoom(room.id, { name: 'New' }), status(400));
+  assert.throws(() => rooms.updateRoom(room.id, { width: 10 }), status(400));
   assert.throws(() => rooms.updateRoom(room.id, { name: 'New', deviceId: 'UNKNOWN_DEVICE', enabled: true }), status(400));
   assert.deepEqual(rooms.getRoom(room.id), room);
   assert.throws(() => rooms.getRoom('missing'), status(404));
   assert.throws(() => rooms.updateRoom('missing', { name: 'New', deviceId: null, enabled: true }), status(404));
+});
+
+test('partial geometry updates preserve other fields and reject invalid coordinates', t => {
+  const { rooms } = setup(t);
+  const room = rooms.createRoom({ name: 'Map room' });
+  assert.equal(room.width, 240);
+  assert.equal(rooms.updateRoom(room.id, { x: 42, width: 500 }).name, 'Map room');
+  assert.equal(rooms.getRoom(room.id).x, 42);
+  for (const input of [{ x: -1 }, { y: Infinity }, { height: 79 }, { width: 2001 }, { x: 1.5 }]) {
+    assert.throws(() => rooms.updateRoom(room.id, input), status(400));
+  }
 });
 
 test('rooms and uniqueness persist across reopening', () => {
