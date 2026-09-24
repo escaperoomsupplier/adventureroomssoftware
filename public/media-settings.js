@@ -151,3 +151,5 @@ export function updateMediaSettings(next) {
   controls();
 }
 controls();
+
+window.addEventListener('pagechange', () => message(''));

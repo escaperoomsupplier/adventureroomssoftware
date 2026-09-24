@@ -126,7 +126,7 @@ export async function startServer({
         res.writeHead(302, { Location: pathname === '/rounds' ? '/leaderboard' : '/' });
         return res.end();
       }
-      const screenLive = /^\/api\/screens\/([A-Za-z0-9_-]{1,80})\/live$/.exec(pathname);
+      const screenLive = /^\/api\/screens\/([A-Za-z0-9_-]{1,128})\/live$/.exec(pathname);
       if (screenLive && req.method === 'GET') {
         screens.screenState(screenLive[1], reception.listSessions());
         if (subscribers.size + screenSubscribers.size >= 64) return json(res, 503, { error: 'Too many live connections' });
@@ -139,7 +139,7 @@ export async function startServer({
       if (req.method === 'GET' && pathname === '/api/screens') return json(res, 200, screens.listScreens());
       if (req.method === 'GET' && pathname === '/api/screen-rules') return json(res, 200, screens.listRules());
       if (req.method === 'GET' && pathname === '/api/media') return json(res, 200, screens.listMedia());
-      const mediaFile = /^\/media\/([A-Za-z0-9_-]{1,80})$/.exec(pathname);
+      const mediaFile = /^\/media\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
       if (mediaFile && ['GET', 'HEAD'].includes(req.method)) return await media.serve(req, res, screens.getMedia(mediaFile[1]));
       if (pathname === '/api/media/upload' && req.method === 'POST') {
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin changes are not allowed' });
@@ -149,9 +149,9 @@ export async function startServer({
         catch (error) { await media.remove(asset).catch(() => {}); throw error; }
         json(res, 201, { media: asset }); publish(); return;
       }
-      const screenRoute = /^\/api\/screens(?:\/([A-Za-z0-9_-]{1,80}))?(\/preview)?$/.exec(pathname);
-      const ruleRoute = /^\/api\/screen-rules(?:\/([A-Za-z0-9_-]{1,80}))?$/.exec(pathname);
-      const mediaRoute = /^\/api\/media\/([A-Za-z0-9_-]{1,80})$/.exec(pathname);
+      const screenRoute = /^\/api\/screens(?:\/([A-Za-z0-9_-]{1,128}))?(\/preview)?$/.exec(pathname);
+      const ruleRoute = /^\/api\/screen-rules(?:\/([A-Za-z0-9_-]{1,128}))?$/.exec(pathname);
+      const mediaRoute = /^\/api\/media\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
       if ((screenRoute || ruleRoute || mediaRoute) && ['POST', 'PATCH', 'DELETE'].includes(req.method)) {
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin changes are not allowed' });
         let body = {};
@@ -180,12 +180,12 @@ export async function startServer({
       }
       if (pathname === '/api/readers' && req.method === 'GET') return json(res, 200, venue.listReaders());
       if (pathname === '/api/leaderboard' && req.method === 'GET') return json(res, 200, venue.listLeaderboard());
-      const historyRoute = /^\/api\/reception\/sessions\/([A-Za-z0-9-]{1,80})\/history$/.exec(pathname);
+      const historyRoute = /^\/api\/reception\/sessions\/([A-Za-z0-9_-]{1,128})\/history$/.exec(pathname);
       if (historyRoute && req.method === 'GET') return json(res, 200, { visits: venue.getHistory(historyRoute[1]) });
-      const captureRoute = /^\/api\/captures\/([A-Za-z0-9-]{1,80})$/.exec(pathname);
+      const captureRoute = /^\/api\/captures\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
       if (captureRoute && req.method === 'GET') return json(res, 200, { capture: captures.get(captureRoute[1]) });
       const readerRoute = /^\/api\/readers\/([A-Za-z0-9_-]{14})(\/capture)?$/.exec(pathname);
-      const resultRoute = /^\/api\/leaderboard\/([A-Za-z0-9-]{1,80})$/.exec(pathname);
+      const resultRoute = /^\/api\/leaderboard\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
       if ((readerRoute && ['PATCH', 'POST'].includes(req.method)) || (captureRoute && req.method === 'DELETE') || (resultRoute && req.method === 'DELETE')) {
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin changes are not allowed' });
         let body = {};
@@ -221,7 +221,7 @@ export async function startServer({
         }
         const body = await readJson(req);
         if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Expected a JSON object' });
-        const route = /^\/api\/rooms\/([A-Za-z0-9-]{1,80})$/.exec(pathname);
+        const route = /^\/api\/rooms\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
         let room;
         if (pathname === '/api/rooms' && req.method === 'POST') room = changeConfiguration(() => rooms.createRoom(body));
         else if (route && req.method === 'PATCH') room = changeConfiguration(() => rooms.updateRoom(route[1], body));
@@ -251,7 +251,7 @@ export async function startServer({
         }
         let session;
         let status = 200;
-        const route = /^\/api\/reception\/sessions\/([A-Za-z0-9-]{1,80})\/(cards|start|end)(?:\/([A-Za-z0-9]{1,32}))?$/.exec(pathname);
+        const route = /^\/api\/reception\/sessions\/([A-Za-z0-9_-]{1,128})\/(cards|start|end)(?:\/([A-Za-z0-9]{1,32}))?$/.exec(pathname);
         if (pathname === '/api/reception/sessions' && req.method === 'POST') {
           session = reception.createSession(body);
           status = 201;
@@ -293,7 +293,7 @@ export async function startServer({
         const recorded = store.recordSnapshot(snapshot, req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? 'unknown', data => {
           capture = captureBaselineReady ? captures.match(data) : null;
           venue.applySnapshot(capture ? { ...data, event: null } : data);
-          screens.syncEvents(venue.listDomainEvents());
+          screens.syncEvents(venue.listDomainEvents(screens.getEventCursor()));
         });
         if (capture) captures.complete(capture, recorded.event.uid);
         // ACK only after SQLite commit. UUPC checks for literal "200 OK".
@@ -322,7 +322,7 @@ export async function startServer({
       }
       if (req.method === 'GET' && pathname === '/api/devices') return json(res, 200, venue.listReaders());
       if (req.method === 'GET' && pathname === '/api/events') return json(res, 200, store.listEvents(15));
-      const playerPage = /^\/screens\/[A-Za-z0-9_-]{1,80}$/.test(pathname);
+      const playerPage = /^\/screens\/[A-Za-z0-9_-]{1,128}$/.test(pathname);
       if (req.method === 'GET' && (assets.has(pathname) || playerPage)) {
         const [file, type] = playerPage ? ['screen.html', 'text/html; charset=utf-8'] : assets.get(pathname);
         const content = await readFile(resolve(publicDir, file));
@@ -348,7 +348,7 @@ export async function startServer({
     });
     // Establish runtime baselines only after this listener binds successfully.
     venue.reconcile({ restart: true });
-    screens.syncEvents(venue.listDomainEvents()); screens.reconcile();
+    screens.syncEvents(venue.listDomainEvents(screens.getEventCursor())); screens.reconcile();
     if (discovery) {
       discoveryHandle = await startDiscovery({ ...discoveryOptions,
         onDevice: device => {

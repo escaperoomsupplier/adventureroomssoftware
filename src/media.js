@@ -36,7 +36,15 @@ export class MediaFiles {
     if (Number.isFinite(length) && length > this.maxBytes) fail(413, 'Media file exceeds the 512 MB limit.');
     const id = randomUUID(), [folder, extension] = types[type];
     const path = `media/${folder}/${id}${extension}`, target = resolve(this.directory, path), temporary = `${target}.upload`;
+    await mkdir(resolve(this.directory, 'media'), { recursive: true });
+    const root = await realpath(this.directory);
+    const mediaRoot = await realpath(resolve(this.directory, 'media'));
+    const mediaInside = relative(root, mediaRoot);
+    if (!mediaInside || mediaInside === '..' || mediaInside.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(mediaInside)) fail(400, 'Media directory must remain inside the configuration folder.');
     await mkdir(resolve(this.directory, 'media', folder), { recursive: true });
+    const destination = await realpath(resolve(this.directory, 'media', folder));
+    const inside = relative(root, destination);
+    if (!inside || inside === '..' || inside.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(inside)) fail(400, 'Media directory must remain inside the configuration folder.');
     const handle = await open(temporary, 'wx');
     let size = 0, prefix = Buffer.alloc(0);
     try {
@@ -55,7 +63,11 @@ export class MediaFiles {
 
   async resolveFile(media) {
     if (!media || typeof media.path !== 'string' || !/^media\/(audio|images|videos)\//.test(media.path) || media.path.includes('\\') || media.path.split('/').includes('..') || isAbsolute(media.path)) fail(400, 'Invalid media path.');
-    const base = await realpath(resolve(this.directory, 'media'));
+    let base;
+    try { base = await realpath(resolve(this.directory, 'media')); } catch(error) { if(error.code === 'ENOENT') fail(404, 'Media folder is missing.'); throw error; }
+    const root = await realpath(this.directory);
+    const mediaRelative = relative(root, base);
+    if (!mediaRelative || mediaRelative === '..' || mediaRelative.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(mediaRelative)) fail(400, 'Media directory must remain inside the configuration folder.');
     let file;
     try { file = await realpath(resolve(this.directory, media.path)); } catch (error) { if (error.code === 'ENOENT') fail(404, 'Media file is missing from the config folder.'); throw error; }
     const remainder = relative(base, file);
@@ -71,8 +83,9 @@ export class MediaFiles {
     const { file, info } = await this.resolveFile(media);
     let start = 0, end = info.size - 1, status = 200;
     if (req.headers.range) {
+      if (!info.size) return this.#rangeError(res, info.size);
       const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
-      if (!range || (!range[1] && !range[2])) return this.#rangeError(res, info.size);
+      if (!range || (!range[1] && !range[2]) || range.slice(1).some(value => value && !Number.isSafeInteger(Number(value)))) return this.#rangeError(res, info.size);
       if (!range[1]) { const suffix = Number(range[2]); if (!suffix) return this.#rangeError(res, info.size); start = Math.max(0, info.size - suffix); }
       else { start = Number(range[1]); if (range[2]) end = Math.min(Number(range[2]), end); }
       if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= info.size) return this.#rangeError(res, info.size);
@@ -83,7 +96,7 @@ export class MediaFiles {
       'Content-Disposition': `inline; filename="media${extname(file).replace(/[^.a-z0-9]/gi, '')}"` };
     if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${info.size}`;
     res.writeHead(status, headers);
-    if (req.method === 'HEAD') return res.end();
+    if (req.method === 'HEAD' || !info.size) return res.end();
     try { await pipeline(createReadStream(file, { start, end }), res); }
     catch (error) { if (!res.destroyed) throw error; }
   }

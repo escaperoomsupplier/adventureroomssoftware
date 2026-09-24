@@ -62,7 +62,23 @@ inspector.addEventListener('keydown', e => {
 }, true);
 function worldPosition(item) {
   const room = rooms.find(r => r.id === item.roomId);
-  return { x: (room?.x || 0) + item.x, y: (room?.y || 0) + item.y };
+  return { x: (room?.x || 0) + (room ? clamp(item.x, 0, Math.max(0, room.width - 116)) : item.x),
+    y: (room?.y || 0) + (room ? clamp(item.y, 0, Math.max(0, room.height - 42)) : item.y) };
+}
+function freeSlot(roomId, excludeId) {
+  const room = rooms.find(r => r.id === roomId);
+  const occupied = [...readers.filter(r => r.configured), ...screens]
+    .filter(item => item.roomId === roomId && item.id !== excludeId)
+    .map(item => { const p = worldPosition(item); return { x: p.x - (room?.x || 0), y: p.y - (room?.y || 0) }; });
+  const maxX = room ? room.width - 116 : 3000, maxY = room ? room.height - 42 : 3000;
+  const startX = room ? Math.min(20, Math.max(0, maxX)) : 1000;
+  const startY = room ? Math.min(20, Math.max(0, maxY)) : 1000;
+  for (let y = startY; y <= maxY; y += 62) {
+    for (let x = startX; x <= maxX; x += 136) {
+      if (occupied.every(p => x + 126 <= p.x || p.x + 126 <= x || y + 52 <= p.y || p.y + 52 <= y)) return { x, y };
+    }
+  }
+  return null;
 }
 function fit() {
   const extents = rooms.map(r => ({ x: r.x, y: r.y, w: r.width, h: r.height }));
@@ -122,7 +138,9 @@ function draw(force = false) {
       const title = svgNode('title'); title.textContent = `${team.teamName} — last recorded room`; row.append(title); canvas.append(row);
     });
   }
-  for (const type of ['reader','screen']) for (const original of collection(type)) {
+  const blocks = ['reader','screen'].flatMap(type => collection(type).map(original => ({ type, original })));
+  blocks.sort((a, b) => Number(selected?.type === a.type && selected.id === a.original.id) - Number(selected?.type === b.type && selected.id === b.original.id));
+  for (const { type, original } of blocks) {
     if (type === 'reader' && (!original.configured || !original.roomId)) continue;
     const item = gesture?.kind === type && gesture.id === original.id ? { ...original, ...gesture.preview } : original;
     const room = displayRooms.find(r => r.id === item.roomId); if (item.roomId && !room) continue;
@@ -180,7 +198,20 @@ function select(type, id) {
     e.preventDefault(); if (!canEdit()) { if (locked) flashLock(); return; }
     const values = data(); let patch = id ? Object.fromEntries(Object.entries(values).filter(([key,value]) => value !== initial[key])) : values;
     if (type === 'reader' && !current.configured) patch.configured = true;
-    if (!id) patch = { ...patch, x: type === 'room' || !patch.roomId ? 1000 : 20, y: type === 'room' || !patch.roomId ? 1000 : 20, ...(type === 'room' ? { width:320,height:220,enabled:true } : {}) };
+    if (!id) patch = { ...patch, x: type === 'room' || !patch.roomId ? 1000 : 20, y: type === 'room' || !patch.roomId ? 1000 : 20, ...(type === 'room' ? { width:320,height:220 } : {}) };
+    if (!id && type === 'room') {
+      outer: for (let row = 0; row < 24; row++) for (let column = 0; column < 24; column++) {
+        const x = 1000 + column * 380, y = 1000 + row * 280;
+        if (rooms.every(r => x + 340 <= r.x || x >= r.x + r.width + 20 || y + 240 <= r.y || y >= r.y + r.height + 20)) {
+          patch.x = x; patch.y = y; break outer;
+        }
+      }
+    }
+    if (type !== 'room' && (!id || Object.hasOwn(patch, 'roomId') || (type === 'reader' && !current.configured))) {
+      const position = freeSlot(values.roomId, id);
+      if (!position) { error.textContent = 'No free space for this block. Enlarge the room or move an existing block before saving.'; error.hidden = false; return; }
+      patch = { ...patch, ...position };
+    }
     if (!Object.keys(patch).length) return;
     const result = await persist(type, id, patch); if (result && selected?.type === type && selected.id === id) select(type, result.id);
   }); inspector.append(form);
@@ -218,7 +249,7 @@ function begin(e, kind, item, edge = null) {
 }
 function cancelGesture() { const old = gesture; gesture = null; if (old && canvas.hasPointerCapture(old.pointer)) canvas.releasePointerCapture(old.pointer); draw(true); }
 canvas.addEventListener('pointerdown', e => {
-  if (!e.target.dataset.pan || e.button !== 0) return;
+  if ((e.target !== canvas && !e.target.dataset.pan) || e.button !== 0) return;
   if (!canEdit()) { clearSelection(); return; }
   gesture = {pointer:e.pointerId,kind:'pan',start:point(e),original:{...view},moved:false}; canvas.setPointerCapture(e.pointerId);
 });
