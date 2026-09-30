@@ -170,14 +170,14 @@ reader baseline. Remove and tap the card again before relying on a new visit,
 start or finish. Machine-state changes such as a puzzle win do not themselves
 finish a team's game or create a leaderboard result.
 
-## Leaderboard and diagnostics
+## Leaderboard and readers
 
 **Leaderboard** shows completed games ordered by total elapsed time, fastest first.
 This measures time from the team's start to its finish, rather than accumulated
 puzzle times or points. Removing a result hides it from the leaderboard while
 retaining the underlying result and team history in SQLite.
 
-**Diagnostics** provides a compact reader list, selectable device details and the
+**Readers** provides a compact reader list, selectable device details and the
 latest 15 RFID events. Dates represent receipt at the server. Friendly names are
 configuration; hardware IDs remain available in details for identification.
 

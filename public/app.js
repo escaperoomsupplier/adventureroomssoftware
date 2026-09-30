@@ -7,6 +7,24 @@ import { updateLeaderboard } from './leaderboard.js';
 import { node, time, table } from './ui.js';
 const $=id=>document.getElementById(id);
 let state={devices:[],readers:[],rooms:[],events:[],sessions:[],leaderboard:[],screens:[],rules:[],media:[],connected:false}, selectedReader=null, diagnosticSignature='';
+let deletingReader=null;
+let readerDeleteTarget=null;
+$('reader-table').insertAdjacentHTML('beforebegin','<p id="reader-error" role="alert" hidden></p><p id="reader-message" role="status" hidden></p>');
+document.body.insertAdjacentHTML('beforeend','<dialog id="reader-delete-dialog" class="reader-delete-dialog" aria-labelledby="reader-delete-title"><h2 id="reader-delete-title">Remove reader?</h2><p id="reader-delete-name"></p><p>Remove reader and its configuration? History is preserved. Online devices may be discovered again.</p><div class="reader-actions"><button id="reader-delete-cancel" type="button" class="secondary" autofocus>Cancel</button><button id="reader-delete-confirm" type="button" class="reader-delete">Remove reader</button></div></dialog>');
+function closeReaderDelete() { readerDeleteTarget=null; $('reader-delete-dialog').close(); }
+$('reader-delete-cancel').addEventListener('click',closeReaderDelete);
+$('reader-delete-dialog').addEventListener('cancel',()=>{readerDeleteTarget=null;});
+$('reader-delete-confirm').addEventListener('click',()=>{
+  const reader=state.readers.find(item=>item.id===readerDeleteTarget);
+  if (!reader || !state.connected || deletingReader!==null) return;
+  closeReaderDelete(); void deleteReader(reader);
+});
+window.addEventListener('pagechange',event=>{if(event.detail?.page!=='devices')closeReaderDelete();});
+function confirmReaderDelete(reader) {
+  if (!state.connected || deletingReader!==null) return;
+  readerDeleteTarget=reader.id;$('reader-delete-name').textContent=reader.name || reader.id;
+  $('reader-delete-confirm').disabled=false;$('reader-delete-dialog').showModal();$('reader-delete-cancel').focus();
+}
 const readerName=id=>state.readers.find(reader=>reader.id===id)?.name || 'Unconfigured reader';
 function contact(reader) {return state.connected && Number.isFinite(Date.parse(reader.lastSeenAt)) && Date.now()-Date.parse(reader.lastSeenAt)<=25000;}
 function readerContact(reader) {
@@ -26,11 +44,36 @@ function details() {
   const list=node('dl',undefined,'wf-details'); for(const [name,value] of [['Device ID',reader.id],['IP address',reader.address],['Last contact',time(reader.lastSeenAt)],['Firmware',device.softwareVersion],['Hardware',device.hardwareVersion],['Reported machine state',device.machineState],['Last UID',device.lastRfid?.uid]]) list.append(node('dt',name),node('dd',value ?? '—'));section.append(list); if (restoreCloseFocus) close.focus();
 }
 function diagnostics() {
-  const next=JSON.stringify([state.readers.map(reader => [reader.id,reader.name,reader.roomId,reader.role,reader.configured,contact(reader)]),state.rooms.map(room => [room.id,room.name]),state.connected]);
+  if(readerDeleteTarget && !state.readers.some(reader=>reader.id===readerDeleteTarget))closeReaderDelete();
+  $('reader-delete-confirm').disabled=!state.connected || deletingReader!==null || !readerDeleteTarget;
+  const next=JSON.stringify([state.readers.map(reader => [reader.id,reader.name,reader.roomId,reader.role,reader.configured,contact(reader)]),state.rooms.map(room => [room.id,room.name]),state.connected,deletingReader]);
   if(next!==diagnosticSignature){ diagnosticSignature=next;const focus=document.activeElement?.dataset.reader;
-    table($('reader-table'),['Reader','Contact','Room','Role',''],state.readers.map(reader=>{const button=node('button','Details','secondary');button.dataset.reader=reader.id;button.addEventListener('click',()=>{selectedReader=reader.id;details();});return [reader.name || 'Unconfigured reader',readerContact(reader),state.rooms.find(room=>room.id===reader.roomId)?.name || '—',({entry:'Entry Room',start:'Start time',finish:'Stop time',exit:'Exit Room'})[reader.role] || 'Unassigned',button];}),'No readers discovered yet.');
+    table($('reader-table'),['Reader','Contact','Room','Role',''],state.readers.map(reader=>{
+      const actions=node('div',undefined,'reader-actions');
+      const button=node('button','Details','secondary');button.dataset.reader=`${reader.id}:details`;button.addEventListener('click',()=>{selectedReader=reader.id;details();});
+      const remove=node('button',deletingReader===reader.id?'Deleting…':'Delete','secondary reader-delete');remove.type='button';remove.dataset.reader=`${reader.id}:delete`;
+      remove.disabled=!state.connected || deletingReader!==null;remove.setAttribute('aria-label',`Delete ${reader.name || reader.id}`);remove.addEventListener('click',()=>confirmReaderDelete(reader));
+      actions.append(button,remove);
+      return [reader.name || 'Unconfigured reader',readerContact(reader),state.rooms.find(room=>room.id===reader.roomId)?.name || '—',({entry:'Entry Room',start:'Start time',finish:'Stop time',exit:'Exit Room'})[reader.role] || 'Unassigned',actions];
+    }),'No readers discovered yet.');
     if(focus)[...$('reader-table').querySelectorAll('button')].find(button=>button.dataset.reader===focus)?.focus();
   }
+}
+async function deleteReader(reader) {
+  if (!state.connected || deletingReader!==null) return;
+  deletingReader=reader.id;$('reader-error').hidden=true;$('reader-message').hidden=true;diagnostics();
+  try {
+    const response=await fetch(`/api/readers/${encodeURIComponent(reader.id)}`,{method:'DELETE',signal:AbortSignal.timeout(10000)});
+    const result=await response.json();
+    if (!response.ok) throw new Error(result.error || `Could not remove reader (HTTP ${response.status}).`);
+    $('reader-message').textContent='Reader removed. History is preserved. Online devices may be discovered again.';
+    $('reader-message').hidden=false;
+    // The authoritative live snapshot updates the table; never remove a newer rediscovery locally.
+  } catch(error) {
+    $('reader-error').textContent=['TypeError','TimeoutError','AbortError','SyntaxError'].includes(error.name)
+      ?'Could not confirm removal. Check the reader list after reconnecting before retrying.' : error.message;
+    $('reader-error').hidden=false;
+  } finally {deletingReader=null;diagnostics();}
 }
 function renderEvents() {
   $('events').replaceChildren();for(const event of [...state.events].sort((a,b)=>b.sequence-a.sequence).slice(0,15)){const row=node('tr');for(const value of [time(event.receivedAt),readerName(event.deviceId),event.type==='rfid.placed'?'Card placed':event.type==='rfid.removed'?'Card removed':event.type,event.uid])row.append(node('td',value ?? '—'));$('events').append(row);}

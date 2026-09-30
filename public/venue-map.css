@@ -28,3 +28,6 @@
 .vm-name-dialog input { width:100%; padding:11px; border:1px solid #cbd9e0; border-radius:7px; color:#203a4c; background:#fff; font:inherit; }
 .vm-name-dialog form>button { margin-right:8px; }
 .vm-ghost-room-name { fill:#243c50; font-size:16px; font-weight:600; }
+.vm-shell button.vm-delete { color:#b33838; border-color:#e5b9b9; background:#fff5f4; }
+.vm-shell button.vm-delete:hover { background:#ffe8e5; border-color:#c66d6d; }
+.vm-reader-dialog>button+button { margin-left:9px; }
