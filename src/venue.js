@@ -43,6 +43,18 @@ export class VenueStore {
       roomId: row.room_id ?? null, x: row.x ?? 20, y: row.y ?? 20, role: row.role ?? 'entry' }));
   }
 
+  deleteReader(id) {
+    return this.#atomic(() => {
+      if (!this.db.prepare('SELECT id FROM devices WHERE id=?').get(id)) fail(404, 'Reader not found.');
+      // Legacy room assignments reference discovery rows, not historical visits.
+      this.db.prepare('UPDATE rooms SET device_id=NULL WHERE device_id=?').run(id);
+      this.db.prepare('DELETE FROM reader_settings WHERE device_id=?').run(id);
+      this.db.prepare('DELETE FROM venue_observed_devices WHERE device_id=?').run(id);
+      this.db.prepare('DELETE FROM devices WHERE id=?').run(id);
+      return { id, status: 'removed' };
+    });
+  }
+
   updateReader(id, input) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Invalid reader update.');
     return this.#atomic(() => {

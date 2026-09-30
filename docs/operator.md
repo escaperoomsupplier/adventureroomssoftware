@@ -13,7 +13,7 @@ Configuration and team actions send no commands to physical hardware.
   expired and cancelled sessions, with name search, status filters and 15 per page.
 - **Leaderboard** (`/leaderboard`): completed games ordered by total elapsed time.
 - **Screen settings** (`/screen-settings`): defaults, media and screen automation. Displays open `/screens` to choose their player.
-- **Diagnostics** (`/devices`): readers, selectable details and the latest 15 RFID events.
+- **Readers** (`/devices`): readers, selectable details and the latest 15 RFID events.
 
 Pages support direct links and browser Back/Forward. Navigation preserves forms
 and maintains one live SSE connection. Reloading discards unsaved form entries.
@@ -178,3 +178,14 @@ configuration directory. Stop the application before copying the complete direct
 to another machine. Invalid configuration stops startup with an error while
 preserving data; legacy data is migrated automatically. Environment variables for
 `PORT`, `HOST` and `DISCOVERY` override saved settings for the current run.
+
+## Remove venue items
+
+Use **Delete** on the Readers page or beside **Save** in the map inspector.
+Removing a reader clears its local configuration and room assignment but preserves
+recorded events and team history. A device still reporting on the network may be
+discovered again as an unconfigured reader.
+
+Rooms with assigned readers, screens, automation rules or active occupants cannot
+be deleted until those references are moved or cleared. Screen deletion remains
+blocked while an automation references it. Historical visits are retained.

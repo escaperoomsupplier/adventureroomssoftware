@@ -207,13 +207,19 @@ export async function startServer({
       if (captureRoute && req.method === 'GET') return json(res, 200, { capture: captures.get(captureRoute[1]) });
       const readerRoute = /^\/api\/readers\/([A-Za-z0-9_-]{14})(\/capture)?$/.exec(pathname);
       const resultRoute = /^\/api\/leaderboard\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
-      if ((readerRoute && ['PATCH', 'POST'].includes(req.method)) || (captureRoute && req.method === 'DELETE') || (resultRoute && req.method === 'DELETE')) {
+      if ((readerRoute && ['PATCH', 'POST', 'DELETE'].includes(req.method)) || (captureRoute && req.method === 'DELETE') || (resultRoute && req.method === 'DELETE')) {
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin changes are not allowed' });
         let body = {};
         if (req.method !== 'DELETE') {
           if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) return json(res, 415, { error: 'Expected application/json' });
           body = await readJson(req);
           if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Expected a JSON object' });
+        }
+        if (readerRoute && !readerRoute[2] && req.method === 'DELETE') {
+          const result = changeConfiguration(() => venue.deleteReader(readerRoute[1]));
+          // Captures are in memory: cancel only after configuration commits.
+          captures.sweep(venue.listReaders());
+          json(res, 200, result); publish(); return;
         }
         if (readerRoute && !readerRoute[2] && req.method === 'PATCH') {
           const reader = changeConfiguration(() => venue.updateReader(readerRoute[1], body));
@@ -233,6 +239,12 @@ export async function startServer({
         return json(res, 404, { error: 'Not found' });
       }
       if (pathname === '/api/rooms' && req.method === 'GET') return json(res, 200, rooms.listRooms());
+      const deleteRoomRoute = /^\/api\/rooms\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
+      if (deleteRoomRoute && req.method === 'DELETE') {
+        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin room changes are not allowed' });
+        const result = changeConfiguration(() => rooms.deleteRoom(deleteRoomRoute[1]));
+        json(res, 200, result); publish(); return;
+      }
       if ((pathname === '/api/rooms' || pathname.startsWith('/api/rooms/')) && ['POST', 'PATCH'].includes(req.method)) {
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
           return json(res, 403, { error: 'Cross-origin room changes are not allowed' });

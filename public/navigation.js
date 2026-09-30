@@ -2,7 +2,7 @@ const routes = new Map([
   ['/', ['overview', 'Overview']],
   ['/reception', ['reception', 'Reception']],
   ['/leaderboard', ['leaderboard', 'Leaderboard']],
-  ['/devices', ['devices', 'Diagnostics']],
+  ['/devices', ['devices', 'Readers']],
   ['/screen-settings', ['screen-settings', 'Screens']],
   ['/media', ['media', 'Media']],
   ['/automations', ['automations', 'Automations']],

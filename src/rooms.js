@@ -56,6 +56,27 @@ export class RoomStore {
     });
   }
 
+  deleteRoom(id) {
+    return this.#transaction(() => {
+      this.getRoom(id);
+      const exists = table => this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
+      if (exists('reader_settings') && this.db.prepare('SELECT device_id FROM reader_settings WHERE room_id=? LIMIT 1').get(id)) {
+        fail(409, 'Unassign or remove the readers in this room before deleting it.');
+      }
+      if (exists('configuration_items')) {
+        for (const row of this.db.prepare("SELECT kind,json FROM configuration_items WHERE kind IN ('screens','rules')").all()) {
+          if (JSON.parse(row.json).roomId === id) fail(409, 'Unassign screens and remove automation rules for this room before deleting it.');
+        }
+      }
+      if (exists('reception_sessions') && this.db.prepare(`SELECT id FROM reception_sessions
+        WHERE current_room_id=? AND pending=0 AND ended_at IS NULL AND terminal_status IS NULL AND ends_at>? LIMIT 1`).get(id, Date.now())) {
+        fail(409, 'An active team is assigned to this room. Record its exit or finish its session before deleting the room.');
+      }
+      this.db.prepare('DELETE FROM rooms WHERE id=?').run(id);
+      return { id, status: 'removed' };
+    });
+  }
+
   getRoom(id) {
     if (typeof id !== 'string' || !id.length || id.length > 128) fail(400, 'Invalid room ID.');
     const row = this.db.prepare('SELECT * FROM rooms WHERE id=?').get(id);

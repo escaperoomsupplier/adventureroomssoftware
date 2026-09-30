@@ -57,8 +57,22 @@ const nameContinue=node('button','Continue');nameContinue.type='submit';const na
 nameForm.append(nameLabel,nameHint,nameContinue,nameCancel);nameDialog.append(nameTitle,nameForm);let creatingType='room';
 nameForm.addEventListener('submit',e=>{e.preventDefault();if(!canEdit())return;const name=nameInput.value.trim();if(!name){nameInput.focus();return;}nameDialog.close();placement={type:creatingType,name,point:null};canvas.focus();syncControls();draw(true);});
 function openNameDialog(type){if(locked)return flashLock();if(!canEdit())return;cancelGesture();cancelPlacement();creatingType=type;nameTitle.textContent=type==='room'?'Add room':'Add screen';nameInput.value='';nameDialog.showModal();nameInput.focus();}
+let deleteTarget=null;
+const deleteDialog=node('dialog',undefined,'vm-reader-dialog');deleteDialog.setAttribute('aria-label','Confirm deletion');
+const deleteTitle=node('h3'),deleteText=node('p',undefined,'vm-help');
+const deleteConfirm=button('Delete',()=>removeSelected());deleteConfirm.className='vm-delete';
+const deleteCancel=button('Cancel',()=>deleteDialog.close());deleteDialog.append(deleteTitle,deleteText,deleteConfirm,deleteCancel);
+function confirmDelete(type,id){if(locked)return flashLock();if(!canEdit())return;const item=itemFor(type,id);if(!item)return;deleteTarget={type,id};deleteTitle.textContent=`Delete ${item.name || item.id}?`;deleteText.textContent=type==='reader'?'Remove this reader and its configuration. Recorded team history is preserved. Online devices may be discovered again.':'Remove this item from the map. Recorded team history is preserved. Items still in use may need to be unassigned first.';deleteDialog.showModal();deleteCancel.focus();}
+async function removeSelected(){
+  if(!deleteTarget || !canEdit()){if(locked)flashLock();return;}const {type,id}=deleteTarget;pending=true;syncControls();deleteConfirm.disabled=true;deleteCancel.disabled=true;error.hidden=true;
+  try{const response=await fetch(`/api/${type}s/${encodeURIComponent(id)}`,{method:'DELETE',signal:AbortSignal.timeout(10000)});if(!response.ok){const body=await response.json();throw new Error(body.error || `Delete rejected (${response.status}).`);}
+    const remaining=collection(type).filter(item=>item.id!==id);if(type==='room')rooms=remaining;else if(type==='reader')readers=remaining;else screens=remaining;
+    if(selected?.type===type && selected.id===id)clearSelection();deleteDialog.close();deleteTarget=null;
+  }catch(problem){error.textContent=['TimeoutError','TypeError','SyntaxError'].includes(problem.name)?'Could not confirm deletion. Check the latest state before retrying.':problem.message;error.hidden=false;deleteDialog.close();}
+  finally{pending=false;deleteConfirm.disabled=false;deleteCancel.disabled=false;syncControls();listReaders();refreshAssigned();draw(true);}
+}
 const inspector = node('section', undefined, 'vm-inspector'); inspector.setAttribute('aria-label', 'Selected item details');
-layout.append(canvas); shell.append(header, toolbar, error, layout, inspector, readerDialog, nameDialog); mount.append(shell);
+layout.append(canvas); shell.append(header, toolbar, error, layout, inspector, readerDialog, nameDialog, deleteDialog); mount.append(shell);
 
 function flashLock() {
   clearTimeout(flashTimer); lockButton.classList.remove('vm-flash');
@@ -66,6 +80,7 @@ function flashLock() {
   flashTimer = setTimeout(() => lockButton.classList.remove('vm-flash'), 850);
 }
 function syncControls() {
+  if(deleteDialog.open && (!connected || locked) && !pending)deleteDialog.close();
   lockLabel.textContent = locked ? 'Locked' : 'Unlocked';
   lockPath.setAttribute('d', locked ? 'M8 10V7a4 4 0 0 1 8 0v3' : 'M8 10V7a4 4 0 0 1 7.5-2');
   lockButton.setAttribute('aria-pressed', String(locked));
@@ -239,6 +254,7 @@ function select(type, id) {
   }
   const initial = data();
   const save = node('button', id ? 'Save' : 'Create'); save.type = 'submit'; save.dataset.save = 'true'; form.append(save);
+  if(id){const remove=button('Delete',()=>confirmDelete(type,id));remove.dataset.save='true';remove.className='vm-delete';form.append(remove);}
   form.addEventListener('submit', async e => {
     e.preventDefault(); if (!canEdit()) { if (locked) flashLock(); return; }
     const values = data(); let patch = id ? Object.fromEntries(Object.entries(values).filter(([key,value]) => value !== initial[key])) : values;
@@ -268,7 +284,7 @@ function select(type, id) {
     const date = new Date(current.lastSeenAt);
     inspector.append(node('p', `ID: ${id} · Last contact: ${Number.isFinite(date.getTime()) ? date.toLocaleTimeString('en-GB') : 'unknown'}`, 'vm-help'));
   }
-  if (type === 'screen' && id) { const link = node('a','Screen settings','vm-settings-link'); link.href = `/screen-settings?screen=${encodeURIComponent(id)}`; inspector.append(link); }
+  if (type === 'screen' && id) { const settings = button('Screen settings',()=>{location.href=`/screen-settings?screen=${encodeURIComponent(id)}`;}); settings.className='vm-settings-link'; inspector.append(settings); }
   syncControls(); draw(true);
 }
 async function persist(type, id, patch) {
@@ -349,6 +365,8 @@ export function updateVenueMap(state={}) {
   connected=state.connected ?? connected;if(!connected && gesture)cancelGesture();
   if(placement && (!canEdit() || placement.type==='reader' && !online('reader',itemFor('reader',placement.id) || {})))cancelPlacement();
   if(!connected){if(readerDialog.open)readerDialog.close();if(nameDialog.open)nameDialog.close();}
+  if(selected?.id && (!itemFor(selected.type,selected.id) || selected.type==='reader' && !itemFor('reader',selected.id)?.configured))clearSelection();
+  if(deleteTarget && !itemFor(deleteTarget.type,deleteTarget.id) && deleteDialog.open)deleteDialog.close();
   if(locked)fit();listReaders();syncControls();refreshAssigned();draw();
 }
 setInterval(()=>{if(placement?.type==='reader' && !online('reader',itemFor('reader',placement.id) || {}))cancelPlacement();if(!gesture){listReaders();refreshAssigned();draw();}},1000);syncControls();draw(true);

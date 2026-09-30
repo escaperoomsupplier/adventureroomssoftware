@@ -19,6 +19,15 @@ body {
   font-size:12px;
   white-space:nowrap;
   color:#526477}
+.reader-actions { display:flex; gap:8px; flex-wrap:wrap }
+.reader-delete { color:#a13232 }
+.reader-delete-dialog { width:min(440px,calc(100vw - 32px)); border:1px solid var(--line); border-radius:14px; padding:24px; color:#192b3e; box-shadow:0 20px 70px #14263833 }
+.reader-delete-dialog::backdrop { background:#14263866 }
+.reader-delete-dialog p { font-size:13px; line-height:1.6 }
+.reader-delete-dialog .reader-actions { justify-content:flex-end; margin-top:20px }
+#reader-delete-name { font-weight:650; overflow-wrap:anywhere }
+#reader-error { color:#a13232; background:#fff0ee; border:1px solid #efd2cc; padding:12px 16px; border-radius:8px; font-size:13px }
+#reader-message { color:#16724d; font-size:13px }
 .reader-contact.online { color:#16724d }
 .reader-contact.offline { color:#b13a3a }
 .reader-contact-dot {
