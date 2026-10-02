@@ -36,13 +36,16 @@ audio. A supported extension does not guarantee every codec will play in every
 browser: preview media on the Windows or macOS display that will actually use it.
 
 Files are stored under the configured local directory in `media/images`,
-`media/videos` and `media/audio`. Library metadata is stored in `media.json`.
+`media/videos` and `media/audio`. Library metadata is stored in `media.json`. Browse Images, Videos and Audio tabs;
+images and videos include thumbnails. Preview opens a closable dialog. Edit a
+name or replace a file with the same media type while keeping its ID and existing
+automation/default references. Replacements update the media cache revision.
 Do not move or rename those files independently of their metadata.
 
 ## Timed automation actions
 
 Use the operator's automation controls to connect a rule to a screen action.
-Each action has an explicit duration of **1 to 3600 seconds**. A new action always
+Image actions have a duration of **1 to 3600 seconds**. Audio and video play once to their natural end. A new action always
 replaces the action currently playing on its target screen. Actions do not queue;
 legacy queue rules are normalized to replacement behavior.
 
@@ -54,10 +57,13 @@ action without creating a duplicate room visit. Repeated state snapshots are not
 new placements. The card must belong to an active team; start/stop readers do not
 substitute for these entry/exit triggers.
 
-When timed actions finish, the screen returns to its configured defaults. Choose
-an intentional duration even for audio and video rather than assuming a file's
-length controls the action. Test the rule, target display, sound and return to
-defaults before using it during a game.
+**Team time starts** runs when a team starts manually or through a start reader.
+**Team time ends** runs on expiry or when a running team finishes manually or
+through a stop reader. Cancelling a pending team does not trigger it.
+
+When an action finishes, the screen returns to its configured defaults. The player
+reports audio/video completion; a replaced action cannot stop newer playback.
+Saving an automation clears the form for the next rule.
 
 Screen actions affect the local display. They do not start or stop UUPC puzzle
 hardware, operate a lock or verify that a team physically entered a room.

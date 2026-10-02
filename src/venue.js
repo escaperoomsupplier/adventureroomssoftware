@@ -139,13 +139,7 @@ export class VenueStore {
           this.db.prepare('DELETE FROM venue_observed_devices WHERE device_id=?').run(device.device_id);
         }
       }
-      const expired = this.db.prepare(`SELECT id,ends_at FROM reception_sessions
-        WHERE pending=0 AND terminal_status IS NULL AND ends_at<=? AND expiry_notified=0`).all(this.now());
-      for (const row of expired) {
-        this.db.prepare('UPDATE reception_sessions SET expiry_notified=1 WHERE id=?').run(row.id);
-        this.db.prepare('UPDATE reception_bindings SET released_at=? WHERE session_id=? AND released_at IS NULL').run(row.ends_at, row.id);
-      }
-      return expired.length > 0;
+      return this.reception.reconcileExpiry();
     });
   }
 
@@ -160,7 +154,7 @@ export class VenueStore {
     if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) fail(400, 'Invalid event cursor.');
     return this.db.prepare(`SELECT id,sequence,type,session_id AS sessionId,room_id AS roomId,occurred_at AS occurredAt,source
       FROM venue_events WHERE sequence>? ORDER BY sequence`).all(afterSequence)
-      .map(row => ({ ...row, occurredAt: new Date(row.occurredAt).toISOString() }));
+      .map(row => ({ ...row, roomId: row.roomId || null, occurredAt: new Date(row.occurredAt).toISOString() }));
   }
 
   #exitVisit(sessionId, roomId, reason) {

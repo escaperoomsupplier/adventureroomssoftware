@@ -123,7 +123,7 @@ export async function startServer({
   heartbeat.unref();
   // Session expiry and playback deadlines are maintained without open operator panels.
   const reconciliation = setInterval(() => {
-    try { captures.sweep(venue.listReaders()); const changed = venue.reconcile(); const playbackChanged = screens.reconcile(); const nextPresence = JSON.stringify(screensWithPresence().map(s => [s.id, s.online])); const presenceChanged = nextPresence !== presenceSignature; presenceSignature = nextPresence; if (changed || playbackChanged) publish(); else if (presenceChanged) publishOperators(); }
+    try { captures.sweep(venue.listReaders()); const changed = venue.reconcile(); const playbackChanged = screens.syncEvents(venue.listDomainEvents(screens.getEventCursor())); const nextPresence = JSON.stringify(screensWithPresence().map(s => [s.id, s.online])); const presenceChanged = nextPresence !== presenceSignature; presenceSignature = nextPresence; if (changed || playbackChanged) publish(); else if (presenceChanged) publishOperators(); }
     catch (error) { logger.error('Venue reconciliation failed:', error.message); }
   }, 1000);
   reconciliation.unref();
@@ -156,6 +156,27 @@ export async function startServer({
         let found = false;
         for (const [res, client] of screenPresence) if (screenSubscribers.get(res) === presenceRoute[1] && client.clientId === body.clientId) { client.lastSeen = presenceNow(); found = true; }
         return json(res, found ? 200 : 409, { connected: found });
+      }
+      const completionRoute = /^\/api\/screens\/([A-Za-z0-9_-]{1,128})\/playback\/([A-Za-z0-9_-]{1,128})\/complete$/.exec(pathname);
+      if (completionRoute && req.method === 'POST') {
+        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin changes are not allowed' });
+        const result = screens.completePlayback(completionRoute[1], completionRoute[2]);
+        json(res, 200, result); if (result.completed) publish(); return;
+      }
+      const replacementRoute = /^\/api\/media\/([A-Za-z0-9_-]{1,128})\/file$/.exec(pathname);
+      if (replacementRoute && req.method === 'POST') {
+        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin changes are not allowed' });
+        const original = screens.getMedia(replacementRoute[1]);
+        const requestedName = requestUrl.searchParams.get('name');
+        const asset = await media.receive(req, requestedName ?? original.name);
+        let previous, updated;
+        try {
+          previous = screens.getMedia(original.id);
+          updated = changeConfiguration(() => screens.replaceMedia(original.id, { ...asset, name: requestedName ?? previous.name }));
+        } catch (error) { await media.remove(asset).catch(() => {}); throw error; }
+        json(res, 200, { media: updated }); publish();
+        if (previous.path !== updated.path) await media.remove(previous).catch(error => logger.error('Media cleanup:', error.message));
+        return;
       }
       if (req.method === 'GET' && pathname === '/api/screens') return json(res, 200, screensWithPresence());
       if (req.method === 'GET' && pathname === '/api/screen-rules') return json(res, 200, screens.listRules());
@@ -191,6 +212,8 @@ export async function startServer({
           if (!ruleRoute[1] && req.method === 'POST') { result = { rule: changeConfiguration(() => screens.createRule(body)) }; status = 201; }
           else if (ruleRoute[1] && req.method === 'PATCH') result = { rule: changeConfiguration(() => screens.updateRule(ruleRoute[1], body)) };
           else if (ruleRoute[1] && req.method === 'DELETE') { changeConfiguration(() => screens.deleteRule(ruleRoute[1])); result = { status: 'removed' }; }
+        } else if (mediaRoute && req.method === 'PATCH') {
+          result = { media: changeConfiguration(() => screens.updateMedia(mediaRoute[1], body)) };
         } else if (mediaRoute && req.method === 'DELETE') {
           const asset = screens.getMedia(mediaRoute[1]);
           changeConfiguration(() => screens.deleteMedia(asset.id));
@@ -282,6 +305,8 @@ export async function startServer({
             return json(res, 400, { error: 'Expected a JSON object' });
           }
         }
+        store.db.exec('SAVEPOINT reception_action');
+        try {
         let session;
         let status = 200;
         const route = /^\/api\/reception\/sessions\/([A-Za-z0-9_-]{1,128})\/(cards|start|end)(?:\/([A-Za-z0-9]{1,32}))?$/.exec(pathname);
@@ -296,11 +321,14 @@ export async function startServer({
           session = reception.startSession(route[1]);
         } else if (route && route[2] === 'end' && !route[3] && req.method === 'POST') {
           session = reception.endSession(route[1]);
-        } else return json(res, 404, { error: 'Not found' });
+        } else throw Object.assign(new Error('Not found'), { status: 404 });
         venue.reconcile();
+        screens.syncEvents(venue.listDomainEvents(screens.getEventCursor()));
+        store.db.exec('RELEASE reception_action');
         json(res, status, { session });
         publish();
         return;
+        } catch (error) { if (store.db.isTransaction) store.db.exec('ROLLBACK TO reception_action; RELEASE reception_action'); throw error; }
       }
       if (req.method === 'POST' && pathname === '/') {
         // Firmware sends HTTP/1.0 with an empty Host and string-valued numbers.

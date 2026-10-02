@@ -165,3 +165,21 @@ test('storage survives reopening and preserves assignment conflicts', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('lifecycle events commit once, cancellation does not end, and missed expiry survives restart', t => {
+  const {db,store,advance}=setup(t);
+  const first=store.createSession({name:'First',durationMinutes:1});
+  store.startSession(first.id);store.startSession(first.id);store.endSession(first.id);store.endSession(first.id);
+  const cancelled=store.createSession({name:'Cancelled',durationMinutes:1});store.endSession(cancelled.id);
+  const second=store.createSession({name:'Second',durationMinutes:1});store.startSession(second.id);
+  advance(120000);
+  const restored=new ReceptionStore(db,{now:()=>Date.parse('2026-01-01T12:02:00Z')});
+  assert.equal(restored.reconcileExpiry(),true);assert.equal(restored.reconcileExpiry(),false);
+  restored.endSession(second.id);
+  const events=db.prepare('SELECT type,session_id,source FROM venue_events ORDER BY sequence').all();
+  assert.deepEqual(events.map(e=>[e.type,e.source]),[['team.started','started'],['team.ended','finished'],['team.started','started'],['team.ended','expired']]);
+  assert.equal(events.some(e=>e.session_id===cancelled.id),false);
+  const third=store.createSession({name:'Rollback',durationMinutes:1});
+  db.exec('BEGIN');store.startSession(third.id);db.exec('ROLLBACK');
+  assert.equal(store.getSession(third.id).status,'pending');assert.equal(db.prepare('SELECT COUNT(*) AS n FROM venue_events').get().n,4);
+});

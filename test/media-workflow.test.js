@@ -97,7 +97,7 @@ test('firmware entry commits playback once and exit clears location without fini
   assert.equal((await firmware(f, 'AABBCCDD_1')).status, 500);
   assert.equal(f.app.reception.getSession(session.id).status, 'active');
   assert.equal(f.app.reception.getSession(session.id).currentRoomId, null);
-  assert.deepEqual(f.app.venue.listDomainEvents(), []);
+  assert.deepEqual(f.app.venue.listDomainEvents().map(event => event.type), ['team.started']);
   assert.equal(f.app.screens.screenState(screen.id).playback, null);
   f.app.screens.syncEvents = sync;
   assert.equal((await firmware(f, 'AABBCCDD_1')).status, 200);
@@ -110,7 +110,7 @@ test('firmware entry commits playback once and exit clears location without fini
   await firmware(f, 'AABBCCDD_0'); await firmware(f, 'AABBCCDD_1');
   const active = f.app.reception.getSession(session.id);
   assert.equal(active.status, 'active'); assert.equal(active.startedAt, startedAt); assert.equal(active.currentRoomId, null);
-  assert.deepEqual(f.app.venue.listDomainEvents().map(event => event.type), ['room.entered', 'room.exited']);
+  assert.deepEqual(f.app.venue.listDomainEvents().map(event => event.type), ['team.started', 'room.entered', 'room.exited']);
 });
 
 test('invalid portable JSON rejects startup without replacing the edited document', async t => {
@@ -158,7 +158,7 @@ test('dedicated screen stream resyncs preview, returns to default on timer and c
   assert.equal(initial.screen.id, screen.id);
   assert.equal(initial.playback, null);
   assert.deepEqual(initial.teams, []);
-  assert.equal(initial.media.find(item => item.id === media.id).url, `/media/${media.id}`);
+  assert.equal(initial.media.find(item => item.id === media.id).url, `/media/${media.id}?v=0`);
   assert.ok(Number.isFinite(Date.parse(initial.serverNow)));
   const preview = await write(f, `/api/screens/${screen.id}/preview`, { action: { ...action, durationSeconds: 1 } });
   assert.equal(preview.status, 200);

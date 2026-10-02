@@ -13,6 +13,11 @@ export class ScreenStore {
       CREATE TABLE IF NOT EXISTS screen_cursor(singleton INTEGER PRIMARY KEY CHECK(singleton=1),sequence INTEGER NOT NULL);
       INSERT OR IGNORE INTO screen_cursor VALUES(1,0);`);
     // The server reconciles playback after loading and validating configuration.
+    for (const row of db.prepare("SELECT id,action_json FROM screen_playback WHERE status='playing'").all()) {
+      const action = JSON.parse(row.action_json);
+      if (['audio','video'].includes(action.type)) db.prepare('UPDATE screen_playback SET action_json=?,ends_at=NULL WHERE id=?')
+        .run(JSON.stringify({ ...action, durationSeconds: null }), row.id);
+    }
   }
   #atomic(action) { this.db.exec('SAVEPOINT screen_change'); try { const result = action(); this.db.exec('RELEASE screen_change'); return result; } catch(error) { this.db.exec('ROLLBACK TO screen_change; RELEASE screen_change'); throw error; } }
   #list(kind) { return this.db.prepare('SELECT json FROM configuration_items WHERE kind=? ORDER BY rowid').all(kind).map(row => JSON.parse(row.json)); }
@@ -32,8 +37,21 @@ export class ScreenStore {
     this.#volume(defaults.music.volume); if(defaults.music.mediaId!==null) this.#media(defaults.music.mediaId,['audio']);
     return {id:value.id,name:value.name,roomId:value.roomId,x:value.x,y:value.y,defaults};
   }
-  #action(input) { if(!object(input) || !['image','video','audio'].includes(input.type)) fail(400,'Invalid action.'); this.#media(input.mediaId,[input.type]); if(!Number.isFinite(input.durationSeconds) || input.durationSeconds<1 || input.durationSeconds>3600) fail(400,'Duration must be between 1 and 3600 seconds.'); this.#volume(input.volume); return {type:input.type,mediaId:input.mediaId,durationSeconds:input.durationSeconds,volume:input.volume}; }
-  #rule(input) { if(!object(input) || !identifier(input.id)) fail(400,'Invalid rule.'); this.#room(input.roomId); this.#get('screens',input.screenId); if(!['room.entered','room.exited'].includes(input.trigger) || !['replace','queue'].includes(input.mode) || typeof input.enabled!=='boolean') fail(400,'Invalid rule trigger, mode or enabled flag.'); return {id:input.id,name:name(input.name),roomId:input.roomId,trigger:input.trigger,screenId:input.screenId,action:this.#action(input.action),mode:'replace',enabled:input.enabled}; }
+  #action(input) {
+    if(!object(input) || !['image','video','audio'].includes(input.type)) fail(400,'Invalid action.');
+    this.#media(input.mediaId,[input.type]);
+    if(input.type==='image' && (!Number.isFinite(input.durationSeconds) || input.durationSeconds<1 || input.durationSeconds>3600)) fail(400,'Image duration must be between 1 and 3600 seconds.');
+    this.#volume(input.volume);
+    return {type:input.type,mediaId:input.mediaId,durationSeconds:input.type==='image'?input.durationSeconds:null,volume:input.volume};
+  }
+  #rule(input) {
+    if(!object(input) || !identifier(input.id)) fail(400,'Invalid rule.');
+    const lifecycle=['team.started','team.ended'].includes(input.trigger);
+    const roomId=input.roomId ?? null;
+    this.#room(roomId,lifecycle);this.#get('screens',input.screenId);
+    if(!['room.entered','room.exited','team.started','team.ended'].includes(input.trigger) || !['replace','queue'].includes(input.mode) || typeof input.enabled!=='boolean') fail(400,'Invalid rule trigger, mode or enabled flag.');
+    return {id:input.id,name:name(input.name),roomId,trigger:input.trigger,screenId:input.screenId,action:this.#action(input.action),mode:'replace',enabled:input.enabled};
+  }
   listScreens() { return this.#list('screens'); }
   getScreen(id) { return this.#get('screens',id); }
   createScreen(input) { if(!object(input)) fail(400,'Invalid screen.'); return this.#save('screens',this.#screen({roomId:null,x:input.roomId?20:1000,y:input.roomId?20:1000,defaults:initialDefaults(),...input,id:randomUUID()})); }
@@ -45,16 +63,36 @@ export class ScreenStore {
   deleteRule(id) { this.#get('rules',id); return this.#atomic(()=>{this.db.prepare('DELETE FROM configuration_items WHERE kind=? AND id=?').run('rules',id);this.db.prepare("UPDATE screen_playback SET status='cancelled' WHERE rule_id=? AND status IN ('playing','queued')").run(id); return {id};}); }
   listMedia() { return this.#list('media'); }
   getMedia(id) { return this.#get('media',id); }
-  #validateMedia(input) { if(!object(input) || !identifier(input.id) || !['image','video','audio'].includes(input.kind) || typeof input.name!=='string' || !input.name.trim() || input.name.length>255 || !Number.isSafeInteger(input.sizeBytes) || input.sizeBytes<1 || typeof input.mimeType!=='string' || !input.mimeType.startsWith(`${input.kind}/`) || typeof input.path!=='string' || !input.path.startsWith('media/') || input.path.includes('\\') || input.path.includes('\0') || input.path.split('/').some(part => !part || part==='.' || part==='..' || part.includes(':'))) fail(400,'Invalid media metadata.'); return structuredClone(input); }
+  #validateMedia(input) { if(!object(input) || !identifier(input.id) || !['image','video','audio'].includes(input.kind) || typeof input.name!=='string' || !input.name.trim() || input.name.length>255 || !Number.isSafeInteger(input.sizeBytes) || input.sizeBytes<1 || typeof input.mimeType!=='string' || !input.mimeType.startsWith(`${input.kind}/`) || typeof input.path!=='string' || !input.path.startsWith('media/') || input.path.includes('\\') || input.path.includes('\0') || input.path.split('/').some(part => !part || part==='.' || part==='..' || part.includes(':'))) fail(400,'Invalid media metadata.'); const revision=input.revision ?? 0; if(!Number.isSafeInteger(revision) || revision<0) fail(400,'Invalid media revision.'); if(input.durationSeconds!=null && (!Number.isFinite(input.durationSeconds) || input.durationSeconds<=0)) fail(400,'Invalid media duration.'); return {...structuredClone(input),revision}; }
   addMedia(input) { const value=this.#validateMedia(input); if(this.listMedia().some(item=>item.id===value.id)) fail(409,'Media already exists.');return this.#save('media',value); }
+  updateMedia(id,input) {
+    if(!object(input) || typeof input.name!=='string') fail(400,'Media name is required.');
+    return this.#save('media',this.#validateMedia({...this.getMedia(id),name:input.name.trim()}));
+  }
+  replaceMedia(id,asset) {
+    const previous=this.getMedia(id);
+    if(!object(asset) || asset.kind!==previous.kind) fail(400,'Replacement media must have the same type.');
+    const value=this.#validateMedia({...asset,id,name:asset.name ?? previous.name,revision:(previous.revision ?? 0)+1});
+    return this.#save('media',value);
+  }
+  completePlayback(screenId,playbackId) {
+    this.getScreen(screenId);
+    if(!identifier(playbackId)) fail(400,'Invalid playback ID.');
+    return this.#atomic(()=>{
+      const row=this.db.prepare("SELECT action_json FROM screen_playback WHERE id=? AND screen_id=? AND status='playing'").get(playbackId,screenId);
+      if(!row || JSON.parse(row.action_json).type==='image') return {completed:false};
+      this.db.prepare("UPDATE screen_playback SET status='completed',ends_at=? WHERE id=?").run(this.now(),playbackId);
+      return {completed:true};
+    });
+  }
   deleteMedia(id) { this.getMedia(id); const used=this.listScreens().some(screen=>screen.defaults.background.mediaId===id || screen.defaults.music.mediaId===id) || this.listRules().some(rule=>rule.action.mediaId===id) || this.db.prepare("SELECT action_json FROM screen_playback WHERE status IN ('playing','queued')").all().some(row=>JSON.parse(row.action_json).mediaId===id); if(used) fail(409,'Media is in use by a screen, rule or playback.'); this.db.prepare('DELETE FROM configuration_items WHERE kind=? AND id=?').run('media',id); return {id}; }
-  validateConfiguration() { for(const media of this.listMedia()) this.#validateMedia(media); for(const screen of this.listScreens()) this.#save('screens',this.#screen(screen));for(const rule of this.listRules())this.#save('rules',this.#rule(rule));return true; }
+  validateConfiguration() { for(const media of this.listMedia()) this.#save('media',this.#validateMedia(media)); for(const screen of this.listScreens()) this.#save('screens',this.#screen(screen));for(const rule of this.listRules())this.#save('rules',this.#rule(rule));return true; }
   #enqueue(screenId, action, {eventId=null,ruleId=null,createdAt=this.now()}={}) {
     const id=randomUUID(), now=this.now(), expiresAt=createdAt+60000;
     // Old undelivered events must not interrupt a newer live action.
     const status=expiresAt<=now?'expired':'playing';
     const inserted=this.db.prepare('INSERT OR IGNORE INTO screen_playback(id,screen_id,event_id,rule_id,action_json,status,created_at,expires_at,starts_at,ends_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
-      .run(id,screenId,eventId,ruleId,JSON.stringify(action),status,createdAt,expiresAt,status==='playing'?now:null,status==='playing'?now+action.durationSeconds*1000:null);
+      .run(id,screenId,eventId,ruleId,JSON.stringify(action),status,createdAt,expiresAt,status==='playing'?now:null,status==='playing' && action.type==='image'?now+action.durationSeconds*1000:null);
     if(inserted.changes && status==='playing') this.db.prepare("UPDATE screen_playback SET status='interrupted' WHERE screen_id=? AND id<>? AND status IN ('playing','queued')").run(screenId,id);
     return id;
   }
@@ -65,8 +103,9 @@ export class ScreenStore {
     for(const event of [...events].sort((a,b)=>a.sequence-b.sequence)) {
       if(!Number.isSafeInteger(event.sequence) || event.sequence<=cursor)continue;
       if(!identifier(event.id) || !Number.isFinite(Date.parse(event.occurredAt))) fail(400,'Invalid screen event.');
-      if(event.source==='reader') for(const rule of rules) if(rule.enabled && rule.trigger===event.type && rule.roomId===event.roomId) {
-        this.#enqueue(rule.screenId,rule.action,{eventId:event.id,ruleId:rule.id,createdAt:Date.parse(event.occurredAt)});
+      const lifecycle=['team.started','team.ended'].includes(event.type);
+      if(lifecycle || event.source==='reader') for(const rule of rules) if(rule.enabled && rule.trigger===event.type && (rule.roomId===event.roomId || lifecycle && rule.roomId===null)) {
+        this.#enqueue(rule.screenId,rule.action,{eventId:event.id,ruleId:rule.id,createdAt:lifecycle?this.now():Date.parse(event.occurredAt)});
         changed=true;
       }
       cursor=event.sequence;
@@ -81,5 +120,5 @@ export class ScreenStore {
     return Number(completed)+Number(retired)>0;
   }); }
   preview(screenId,action) { this.getScreen(screenId);const validated=this.#action(action);return this.#atomic(()=>{const id=this.#enqueue(screenId,validated,{mode:'replace'});this.reconcile();const state=this.screenState(screenId);return state.playback;}); }
-  screenState(id,sessions=[]) { const screen=this.getScreen(id);const current=this.db.prepare("SELECT * FROM screen_playback WHERE screen_id=? AND status='playing'").get(id); return {screen,playback:current?{id:current.id,action:JSON.parse(current.action_json),startsAt:new Date(current.starts_at).toISOString(),endsAt:new Date(current.ends_at).toISOString()}:null,teams:sessions.filter(team=>team.status==='active' && team.currentRoomId===screen.roomId && screen.roomId!==null && Date.parse(team.endsAt)>this.now()),serverNow:new Date(this.now()).toISOString(),media:this.listMedia().map(({path,...media})=>({...media,url:`/media/${encodeURIComponent(media.id)}`}))}; }
+  screenState(id,sessions=[]) { const screen=this.getScreen(id);const current=this.db.prepare("SELECT * FROM screen_playback WHERE screen_id=? AND status='playing'").get(id); return {screen,playback:current?{id:current.id,action:JSON.parse(current.action_json),startsAt:new Date(current.starts_at).toISOString(),endsAt:current.ends_at===null?null:new Date(current.ends_at).toISOString()}:null,teams:sessions.filter(team=>team.status==='active' && team.currentRoomId===screen.roomId && screen.roomId!==null && Date.parse(team.endsAt)>this.now()),serverNow:new Date(this.now()).toISOString(),media:this.listMedia().map(({path,...media})=>({...media,url:`/media/${encodeURIComponent(media.id)}?v=${media.revision ?? 0}`}))}; }
 }

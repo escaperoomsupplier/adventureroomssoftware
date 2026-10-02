@@ -212,8 +212,8 @@ test('exit readers clear only their matching room and emit transactional domain 
   assert.ok(history[0].exitedAt);
   assert.equal(history[0].exitReason, 'reader_exit');
   const events = venue.listDomainEvents();
-  assert.deepEqual(events.map(e => e.type), ['room.entered', 'room.exited', 'room.exited', 'room.exited']);
-  assert.equal(venue.listDomainEvents(events[0].sequence).length, 3);
+  assert.deepEqual(events.map(e => e.type), ['team.started', 'room.entered', 'room.exited', 'room.exited', 'room.exited']);
+  assert.equal(venue.listDomainEvents(events[0].sequence).length, 4);
   tap(ids[0]);
   venue.updateReader(ids[1], { role: 'entry' }); tap(ids[1]);
   assert.equal(venue.getHistory(team.id)[1].exitReason, 'next_room');
@@ -230,11 +230,11 @@ test('domain events and visit exit changes roll back with the firmware transacti
   post('00000000', false); post('AABBCCDD', true);
   venue.updateReader(ids[0], { role: 'exit' }); post('AABBCCDD', false);
   assert.throws(() => post('AABBCCDD', true, true), /Rollback event/);
-  assert.equal(venue.listDomainEvents().length, 1);
+  assert.equal(venue.listDomainEvents().length, 2);
   assert.equal(venue.getHistory(team.id)[0].exitedAt, null);
   assert.equal(reception.getSession(team.id).currentRoomId, room.id);
   post('AABBCCDD', true);
-  assert.equal(venue.listDomainEvents().length, 2);
+  assert.equal(venue.listDomainEvents().length, 3);
 });
 
 
@@ -251,4 +251,14 @@ test('different entry readers and fresh placements trigger automation without du
   const count=venue.listDomainEvents().length;
   venue.applySnapshot({device:{id:ids[2]},previous:{lastSeenAt:new Date().toISOString()},event:{sequence:5,uid:'AABBCCDD',placed:true,type:'rfid.placed'}});
   assert.equal(venue.listDomainEvents().length,count);
+});
+
+test('reader start and finish emit lifecycle exactly once without cancellation events', t=>{
+  const {venue,reception,room,team,observe,tap}=setup(t);
+  venue.updateReader(ids[0],{configured:true,roomId:room.id,role:'start'});
+  venue.updateReader(ids[1],{configured:true,roomId:room.id,role:'finish'});
+  observe(ids[0]);observe(ids[1]);tap(ids[0]);tap(ids[0]);tap(ids[1]);tap(ids[1]);
+  const events=venue.listDomainEvents().filter(e=>e.type.startsWith('team.'));
+  assert.deepEqual(events.map(e=>e.type),['team.started','team.ended']);
+  assert.equal(events[1].source,'finished');assert.equal(reception.getSession(team.id).status,'finished');
 });
