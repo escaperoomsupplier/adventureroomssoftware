@@ -3,6 +3,86 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24.11.0" },
-  "scripts": { "start": "node src/server.js", "test": "node --test", "simulate": "node scripts/simulate-upc.js" }
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "simulate": "node scripts/simulate-upc.js",
+    "build:server": "node scripts/build-release.mjs",
+    "desktop": "npm run build:server && electron .",
+    "build:release": "npm run build:server && electron-builder --publish never",
+    "test:release": "node scripts/smoke-release.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "postject": "1.0.0-alpha.6"
+  },
+  "description": "Local adventure room operations, RFID timing, media automation and leaderboards.",
+  "author": "Krystian Bartosik",
+  "license": "UNLICENSED",
+  "main": "desktop/main.cjs",
+  "build": {
+    "appId": "com.escaperoomsupplier.adventurerooms",
+    "productName": "Adventure Rooms",
+    "directories": {
+      "output": "dist",
+      "buildResources": "desktop"
+    },
+    "files": [
+      "desktop/main.cjs",
+      "desktop/launcher.js",
+      "desktop/icon.png",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/server",
+        "to": "server",
+        "filter": ["AdventureRooms", "AdventureRooms.exe", "NODE-LICENSE.txt"]
+      }
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "desktop/icon.ico",
+      "artifactName": "AdventureRooms-${version}-windows-${arch}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "desktop/icon.ico",
+      "uninstallerIcon": "desktop/icon.ico"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "desktop/icon.icns",
+      "category": "public.app-category.entertainment",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "notarize": false,
+      "artifactName": "AdventureRooms-${version}-macos-${arch}.${ext}"
+    },
+    "dmg": {
+      "sign": false
+    },
+    "publish": null
+  }
 }
