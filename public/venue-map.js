@@ -4,7 +4,7 @@ const node = (tag, text, cls) => { const e = document.createElement(tag); if (te
 const svgNode = (tag, attrs = {}) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const snap = value => Math.round(value / 20) * 20;
-const roles = { start: 'Start time', finish: 'Stop time', entry: 'Entry Room', exit: 'Exit Room' };
+const roles = { start: 'Start time', stop: 'Stop time', pairing: 'Card assignment' };
 let rooms = [], readers = [], screens = [], sessions = [], connected = false, locked = true, pending = false;
 let selected = null, gesture = null, signature = '', listSignature = '', flashTimer, suppressClick = false;
 let placement = null;
@@ -249,7 +249,7 @@ function select(type, id) {
   if (type === 'room') data = () => ({ name: name.value.trim() });
   else {
     const assigned = field(form, 'Room', current?.roomId || '', [['','Unassigned'], ...rooms.map(r => [r.id,r.name])]);
-    const role = type === 'reader' ? field(form, 'Role', current?.role || 'entry', Object.entries(roles)) : null;
+    const role = type === 'reader' ? field(form, 'Role', current?.role || 'start', Object.entries(roles)) : null;
     data = () => ({ name: name.value.trim(), roomId: assigned.value || null, ...(role ? { role: role.value, configured: true } : {}) });
   }
   const initial = data();
@@ -357,7 +357,7 @@ canvas.addEventListener('dragover',e=>{if(canEdit() && [...e.dataTransfer.types]
 canvas.addEventListener('drop',async e=>{
   if(!canEdit())return; e.preventDefault(); const id=e.dataTransfer.getData('application/x-venue-reader'), reader=itemFor('reader',id);if(!reader)return;
   const p=point(e),room=roomAt(p);if(!room)return;
-  const saved = await persist('reader',id,{configured:true,name:reader.name || reader.id,role:reader.role || 'entry',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))});
+  const saved = await persist('reader',id,{configured:true,name:reader.name || reader.id,role:reader.role || 'start',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))});
   if (saved) select('reader',saved.id);
 });
 export function updateVenueMap(state={}) {
@@ -382,7 +382,7 @@ document.addEventListener('click',async e=>{
   let patch,id=null;
   if(chosen.type==='reader'){
     const reader=itemFor('reader',chosen.id);if(!room || !reader || !online('reader',reader))return;id=reader.id;
-    patch={configured:true,name:reader.name || reader.id,role:reader.role || 'entry',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))};
+    patch={configured:true,name:reader.name || reader.id,role:reader.role || 'start',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))};
   }else if(chosen.type==='room')patch={name:chosen.name,x:clamp(snap(p.x),-10000,10000),y:clamp(snap(p.y),-10000,10000),width:320,height:220};
   else patch={name:chosen.name,roomId:room?.id || null,x:room?clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)):clamp(snap(p.x),-10000,10000),y:room?clamp(snap(p.y-room.y),0,Math.max(0,room.height-42)):clamp(snap(p.y),-10000,10000)};
   const saved=await persist(chosen.type,id,patch);if(saved)select(chosen.type,saved.id);

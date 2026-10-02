@@ -1,6 +1,15 @@
 import { node, time, duration, table, uncertain } from './ui.js';
 let entries=[], connected=false, pending=false, confirming=null, signature='';
+let allEntries=[],roomEntries={},rooms=[],selection='',generation=0;
 const container=document.getElementById('leaderboard'), message=document.getElementById('leaderboard-message');
+const filter=node('select');filter.setAttribute('aria-label','Leaderboard room');
+const label=node('label','Ranking: ');label.append(filter);container.before(label);
+filter.addEventListener('change',async()=>{
+  selection=filter.value;confirming=null;entries=selection?(roomEntries[selection] || []):allEntries;render();
+  const token=++generation;
+  try {const response=await fetch(`/api/leaderboard${selection?`?roomId=${encodeURIComponent(selection)}`:''}`,{signal:AbortSignal.timeout(10000)});const data=await response.json();if(!response.ok)throw new Error(data.error || 'Could not load ranking.');if(token!==generation)return;entries=data;render();}
+  catch(error){if(token===generation)message.textContent='Could not refresh ranking. Showing the last received results.';}
+});
 function render() {
   const next=JSON.stringify([entries,connected,pending,confirming]); if(next===signature)return; signature=next;
   const sorted=[...entries].sort((a,b)=>(a.elapsedMs ?? a.durationMs)-(b.elapsedMs ?? b.durationMs));
@@ -17,4 +26,9 @@ async function remove(id) {
   catch(error){message.textContent=uncertain(error)?'Could not confirm removal. Check the refreshed leaderboard before retrying.':error.message;}
   finally{pending=false;render();}
 }
-export function updateLeaderboard(state={}) {if(state.leaderboard)entries=state.leaderboard;connected=state.connected??connected;render();}
+export function updateLeaderboard(state={}) {
+  if(state.leaderboard)allEntries=state.leaderboard;if(state.roomLeaderboards)roomEntries=state.roomLeaderboards;
+  if(state.rooms){rooms=state.rooms;const key=JSON.stringify(rooms.map(room=>[room.id,room.name]));if(filter.dataset.items!==key){filter.dataset.items=key;filter.replaceChildren(new Option('Total time',''));for(const room of rooms)filter.add(new Option(room.name,room.id));if(rooms.some(room=>room.id===selection))filter.value=selection;else selection='';}}
+  if(state.leaderboard || state.roomLeaderboards){generation++;entries=selection?(roomEntries[selection] || []):allEntries;}
+  connected=state.connected??connected;render();
+}

@@ -24,27 +24,25 @@ test('media rename and file replacement retain references and roll back failed p
  assert.deepEqual(f.app.screens.getMedia(media.id),before);assert.deepEqual(await readdir(join(f.dir,'config/media/images')),files);
  assert.equal(JSON.parse(await readFile(join(f.dir,'config/media.json'),'utf8')).items[0].name,'Updated');
 });
-test('manual team lifecycle triggers once and natural playback completion ignores stale IDs',async t=>{
+test('saved team lifecycle replaces playback and ignores stale completion',async t=>{
  const f=await fixture(t),{media}=await f.upload('/api/media/upload?name=Sound',wav,'audio/wav'),{screen}=await f.request('/api/screens',{name:'Wall'});
  const action={type:'audio',mediaId:media.id,volume:1};
  for(const trigger of ['team.started','team.ended'])assert.equal((await f.request('/api/screen-rules',{name:trigger,trigger,roomId:null,screenId:screen.id,action})).status,201);
- const {session}=await f.request('/api/reception/sessions',{name:'Team',durationMinutes:60});
- const original=f.app.screens.syncEvents;f.app.screens.syncEvents=()=>{throw new Error('Playback unavailable');};
- assert.equal((await f.request(`/api/reception/sessions/${session.id}/start`)).status,500);assert.equal(f.app.reception.getSession(session.id).status,'pending');
- f.app.screens.syncEvents=original;assert.equal((await f.request(`/api/reception/sessions/${session.id}/start`)).status,200);
+ const {session}=await f.request('/api/reception/sessions',{name:'Team'});
+ const {room}=await f.request('/api/rooms',{name:'Puzzle'});
+ f.app.reception.startRoom(session.id,room,{id:'test',name:'Start'});
+ f.app.screens.syncEvents(f.app.venue.listDomainEvents());
  const first=f.app.screens.screenState(screen.id).playback;assert.ok(first);assert.equal(first.endsAt,null);
+ f.app.reception.stopRoom(session.id,room,{id:'test',name:'Stop'});
+ const original=f.app.screens.syncEvents;f.app.screens.syncEvents=()=>{throw new Error('Playback unavailable');};
+ assert.equal((await f.request(`/api/reception/sessions/${session.id}/end`)).status,500);assert.equal(f.app.reception.getSession(session.id).status,'active');
+ f.app.screens.syncEvents=original;
  assert.equal((await f.request(`/api/reception/sessions/${session.id}/end`)).status,200);
  const second=f.app.screens.screenState(screen.id).playback;assert.notEqual(second.id,first.id);
  assert.equal((await f.request(`/api/screens/${screen.id}/playback/${first.id}/complete`)).completed,false);
  assert.equal(f.app.screens.screenState(screen.id).playback.id,second.id);
  assert.equal((await f.request(`/api/screens/${screen.id}/playback/${second.id}/complete`)).completed,true);
  assert.equal((await f.request(`/api/screens/${screen.id}/playback/${second.id}/complete`)).completed,false);
+ const {session:pending}=await f.request('/api/reception/sessions',{name:'Cancelled'});await f.request(`/api/reception/sessions/${pending.id}/cancel`);
  assert.equal(f.app.screens.screenState(screen.id).playback,null);
- const {session:pending}=await f.request('/api/reception/sessions',{name:'Cancelled',durationMinutes:60});await f.request(`/api/reception/sessions/${pending.id}/end`);
- assert.equal(f.app.screens.screenState(screen.id).playback,null);
- const {session:expires}=await f.request('/api/reception/sessions',{name:'Expiring',durationMinutes:1});await f.request(`/api/reception/sessions/${expires.id}/start`);
- f.app.store.db.prepare('UPDATE reception_sessions SET ends_at=? WHERE id=?').run(Date.now()-1,expires.id);
- const deadline=Date.now()+3500;while(Date.now()<deadline&&!f.app.venue.listDomainEvents().some(e=>e.type==='team.ended'&&e.sessionId===expires.id))await new Promise(r=>setTimeout(r,25));
- assert.equal(f.app.venue.listDomainEvents().filter(e=>e.type==='team.ended'&&e.sessionId===expires.id).length,1);
- assert.ok(f.app.screens.screenState(screen.id).playback);
 });

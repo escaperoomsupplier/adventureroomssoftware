@@ -28,50 +28,128 @@ function setup(t, path = ':memory:') {
   return { devices, reception, rooms, room, venue, team, observe, tap, now, advance: ms => { time += ms; } };
 }
 
-test('configured readers start, visit and finish independent of machine state', t => {
-  const { venue, reception, room, team, observe, tap, advance } = setup(t);
-  venue.updateReader(ids[0], { configured: true, role: 'start', roomId: room.id, name: 'Start gate' });
-  venue.updateReader(ids[1], { configured: true, role: 'entry', roomId: room.id });
-  venue.updateReader(ids[2], { configured: true, role: 'finish', name: 'Finish gate' });
-  for (const id of ids) observe(id);
-  tap(ids[1]);
-  assert.equal(reception.getSession(team.id).status, 'pending');
-  tap(ids[0]);
-  const started = reception.getSession(team.id);
-  assert.equal(started.status, 'active');
-  assert.equal(started.currentRoomId, room.id);
-  advance(5000);
-  tap(ids[0]); tap(ids[1]);
-  assert.equal(reception.getSession(team.id).startedAt, started.startedAt);
-  assert.equal(venue.getHistory(team.id).length, 1);
-  tap(ids[2]);
-  assert.equal(reception.getSession(team.id).status, 'finished');
-  assert.equal(venue.listLeaderboard()[0].elapsedMs, 5000);
-  tap(ids[2]);
-  assert.equal(venue.listLeaderboard().length, 1);
+
+test('reader roles migrate aliases and first transitions alone emit events',t=>{
+ const {venue,reception,room,team,observe,tap,advance}=setup(t);
+ assert.equal(venue.updateReader(ids[0],{configured:true,role:'entry',roomId:room.id}).role,'start');
+ assert.equal(venue.updateReader(ids[1],{configured:true,role:'finish',roomId:room.id}).role,'stop');
+ venue.updateReader(ids[2],{configured:true,role:'start',roomId:room.id});ids.forEach(observe);
+ tap(ids[1]);assert.equal(reception.getSession(team.id).status,'pending');tap(ids[0]);advance(1000);tap(ids[2]);tap(ids[1]);tap(ids[1]);tap(ids[0]);
+ assert.equal(reception.getSession(team.id).elapsedMs,1000);assert.equal(venue.getHistory(team.id).length,1);
+ assert.deepEqual(venue.listDomainEvents().map(e=>e.type),['team.started','room.entered','room.exited']);
+ reception.endSession(team.id);assert.equal(venue.listLeaderboard()[0].elapsedMs,1000);assert.equal(venue.listLeaderboard(room.id)[0].elapsedMs,1000);
+ const result=venue.listLeaderboard()[0];venue.deleteLeaderboard(result.id);assert.deepEqual(venue.listLeaderboard(),[]);assert.deepEqual(venue.listLeaderboard(room.id),[]);assert.equal(venue.getHistory(team.id).length,1);
+});
+test('pairing and unassigned readers never start games; recovery requires baseline',t=>{
+ const {venue,reception,room,team,observe,tap}=setup(t);
+ venue.updateReader(ids[0],{configured:true,role:'pairing',roomId:room.id});observe(ids[0]);tap(ids[0]);assert.equal(reception.getSession(team.id).status,'pending');
+ venue.updateReader(ids[0],{role:'start',roomId:null});tap(ids[0]);assert.equal(reception.getSession(team.id).status,'pending');
+ venue.updateReader(ids[0],{roomId:room.id});venue.reconcile({restart:true});tap(ids[0]);assert.equal(reception.getSession(team.id).status,'pending');tap(ids[0]);assert.equal(reception.getSession(team.id).status,'active');
+});
+test('concurrent room timers, reset visits and global sum survive restart',t=>{
+ const {devices,venue,reception,rooms,room,team,observe,tap,advance,now}=setup(t);const second=rooms.createRoom({name:'Second'});
+ venue.updateReader(ids[0],{configured:true,role:'start',roomId:room.id});venue.updateReader(ids[1],{configured:true,role:'start',roomId:second.id});ids.forEach(observe);
+ tap(ids[0]);advance(100);tap(ids[1]);advance(200);assert.equal(reception.getSession(team.id).elapsedMs,500);
+ let reopened=new VenueStore(devices.db,{now});assert.equal(reopened.reception.getSession(team.id).roomTimes.length,2);
+ reception.resetSession(team.id);assert.deepEqual(venue.getHistory(team.id),[]);assert.deepEqual(reception.getSession(team.id).roomTimes,[]);
+});
+test('RFID transaction rollback restores processed marker, visit and room timer',t=>{
+ const {devices,venue,reception,room,team,observe,tap}=setup(t);venue.updateReader(ids[0],{configured:true,role:'start',roomId:room.id});observe(ids[0]);
+ devices.db.exec("CREATE TRIGGER reject_visit BEFORE INSERT ON team_visits BEGIN SELECT RAISE(ABORT,'failed'); END");assert.throws(()=>tap(ids[0]),/failed/);
+ assert.equal(reception.getSession(team.id).status,'pending');assert.deepEqual(venue.listDomainEvents(),[]);assert.equal(devices.db.prepare('SELECT COUNT(*) AS n FROM venue_processed_events').get().n,0);
+ devices.db.exec('DROP TRIGGER reject_visit');tap(ids[0]);assert.equal(reception.getSession(team.id).status,'active');
 });
 
-test('multiple teams and readers share rooms, history snapshots survive renaming', t => {
-  const { venue, reception, rooms, room, team, observe, tap } = setup(t);
-  const next = rooms.createRoom({ name: 'Next room' });
-  venue.updateReader(ids[0], { configured: true, roomId: room.id, name: 'Door A' });
-  venue.updateReader(ids[1], { configured: true, roomId: room.id, name: 'Door B' });
-  venue.updateReader(ids[2], { configured: true, roomId: next.id, role: 'finish' });
-  for (const id of ids) observe(id);
-  reception.startSession(team.id);
-  const second = reception.createSession({ name: 'Second', durationMinutes: 60 });
-  reception.assignCard(second.id, '12345678'); reception.startSession(second.id);
-  tap(ids[0]); tap(ids[1], '12345678');
-  assert.equal(reception.getSession(second.id).currentRoomId, room.id);
-  rooms.updateRoom(room.id, { name: 'Renamed' });
-  venue.updateReader(ids[0], { name: 'Renamed reader' });
-  assert.equal(venue.getHistory(team.id)[0].roomName, 'First room');
-  assert.equal(venue.getHistory(team.id)[0].readerName, 'Door A');
-  tap(ids[2]);
-  assert.equal(venue.getHistory(team.id).length, 2);
-  assert.equal(reception.getSession(team.id).currentRoomId, next.id);
-  assert.equal(reception.getSession(team.id).status, 'finished');
+
+test('reader settings validate input and positions clamp durably on assignment and resize', t => {
+  const { venue, room, rooms } = setup(t);
+  assert.equal(venue.listReaders()[0].configured, false);
+  venue.updateReader(ids[0], { roomId: room.id, x: 1000, y: 1000 });
+  assert.equal(venue.listReaders()[0].x, 240);
+  rooms.updateRoom(room.id, { width: 120, height: 80 });
+  assert.equal(venue.listReaders()[0].x, 120);
+  assert.equal(venue.listReaders()[0].y, 80);
+  for (const input of [{ name: '' }, { role: 'bad' }, { configured: 1 }, { roomId: 'missing' }, { x: NaN }]) {
+    assert.throws(() => venue.updateReader(ids[0], input), error => error.status === 400);
+  }
+  assert.throws(() => venue.updateReader('missing', {}), error => error.status === 404);
 });
+
+
+test('snapshot transaction rollback restores baseline, team, visit and processed ledger', t => {
+  const { devices, venue, reception, room, team } = setup(t);
+  venue.updateReader(ids[0], { configured: true, role: 'start', roomId: room.id });
+  const send = rfid => devices.recordSnapshot({ id: ids[0], machineState: 2, rfid }, '127.0.0.1', data => venue.applySnapshot(data));
+  send({ uid: '00000000', placed: false });
+  const before = devices.listDevices();
+  assert.throws(() => devices.recordSnapshot({ id: ids[0], machineState: 2, rfid: { uid: 'AABBCCDD', placed: true } }, '127.0.0.1', data => {
+    venue.applySnapshot(data); throw new Error('Abort');
+  }), /Abort/);
+  assert.deepEqual(devices.listDevices(), before);
+  assert.equal(reception.getSession(team.id).status, 'pending');
+  assert.deepEqual(venue.getHistory(team.id), []);
+  assert.equal(devices.db.prepare('SELECT count(*) AS n FROM venue_processed_events').get().n, 0);
+  send({ uid: 'AABBCCDD', placed: true });
+  assert.equal(reception.getSession(team.id).status, 'active');
+});
+
+
+test('aborted first runtime snapshot cannot establish a recovery baseline', t => {
+  const { devices, venue, reception, team, room } = setup(t);
+  venue.updateReader(ids[0], { configured: true, role: 'start', roomId: room.id });
+  devices.recordSnapshot({ id: ids[0], machineState: 0, rfid: { uid: '00000000', placed: false } }, '127.0.0.1');
+  const snapshot = { id: ids[0], machineState: 0, rfid: { uid: 'AABBCCDD', placed: true } };
+  assert.throws(() => devices.recordSnapshot(snapshot, '127.0.0.1', data => {
+    venue.applySnapshot(data); throw new Error('Abort baseline');
+  }), /Abort baseline/);
+  assert.equal(devices.db.prepare('SELECT count(*) AS n FROM venue_observed_devices').get().n, 0);
+  devices.recordSnapshot(snapshot, '127.0.0.1', data => venue.applySnapshot(data));
+  assert.equal(reception.getSession(team.id).status, 'pending');
+});
+
+
+test('legacy controller assignments migrate once and settings/results survive reopening', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'venue-'));
+  let devices;
+  try {
+    const path = join(directory, 'state.sqlite');
+    devices = new DeviceStore(path);
+    let reception = new ReceptionStore(devices.db);
+    let rooms = new RoomStore(devices.db);
+    devices.recordDiscovery({ id: ids[0], address: '127.0.0.1' });
+    const room = rooms.createRoom({ name: 'Legacy', deviceId: ids[0] });
+    let venue = new VenueStore(devices.db);
+    assert.equal(venue.listReaders()[0].roomId, room.id);
+    venue.updateReader(ids[0], { roomId: null, configured: false });
+    const team = reception.createSession({ name: 'Persistent', durationMinutes: 60 });
+    reception.startRoom(team.id, room); reception.stopRoom(team.id, room); reception.endSession(team.id);
+    const result = venue.listLeaderboard()[0]; venue.deleteLeaderboard(result.id);
+    devices.close(); devices = new DeviceStore(path);
+    reception = new ReceptionStore(devices.db); rooms = new RoomStore(devices.db); venue = new VenueStore(devices.db);
+    assert.equal(venue.listReaders()[0].roomId, null);
+    assert.equal(venue.listReaders()[0].configured, false);
+    assert.equal(reception.getSession(team.id).status, 'finished');
+    assert.deepEqual(venue.listLeaderboard(), []);
+  } finally { devices?.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test('domain events and visit exit changes roll back with the firmware transaction', t => {
+  const { devices, venue, reception, room, team } = setup(t);
+  venue.updateReader(ids[0], { configured: true, roomId: room.id, role: 'entry' });
+  const post = (uid, placed, fail = false) => devices.recordSnapshot({ id: ids[0], machineState: 0, rfid: { uid, placed } }, '127.0.0.1', data => {
+    venue.applySnapshot(data); if (fail) throw new Error('Rollback event');
+  });
+  post('00000000', false); post('AABBCCDD', true);
+  venue.updateReader(ids[0], { role: 'exit' }); post('AABBCCDD', false);
+  assert.throws(() => post('AABBCCDD', true, true), /Rollback event/);
+  assert.equal(venue.listDomainEvents().length, 2);
+  assert.equal(venue.getHistory(team.id)[0].exitedAt, null);
+  assert.equal(reception.getSession(team.id).currentRoomId, room.id);
+  post('AABBCCDD', true);
+  assert.equal(venue.listDomainEvents().length, 3);
+});
+
 
 test('unconfigured readers, baseline and duplicate events cannot trigger lifecycle changes', t => {
   const { devices, venue, reception, rooms, room, team, observe, tap, now } = setup(t);
@@ -93,172 +171,29 @@ test('unconfigured readers, baseline and duplicate events cannot trigger lifecyc
   assert.equal(reception.getSession(team.id).status, 'active');
 });
 
-test('leaderboard uses total time, hides entries permanently and expiry never ranks', t => {
-  const { reception, venue, team, advance } = setup(t);
-  reception.startSession(team.id); advance(5000); reception.endSession(team.id);
-  const second = reception.createSession({ name: 'Faster', durationMinutes: 1 });
-  reception.startSession(second.id); advance(2000); reception.endSession(second.id);
-  assert.deepEqual(venue.listLeaderboard().map(row => row.teamName), ['Faster', 'Team']);
+test('teams share readers without sharing timing, names snapshot and rankings sort only saved results', t => {
+  const { venue, reception, rooms, room, team, observe, tap, advance } = setup(t);
+  venue.updateReader(ids[0], { configured: true, role: 'start', roomId: room.id, name: 'Start gate' });
+  venue.updateReader(ids[1], { configured: true, role: 'stop', roomId: room.id });
+  observe(ids[0]); observe(ids[1]);
+  const second = reception.createSession({ name: 'Second' });
+  reception.assignCard(second.id, '12345678');
+  tap(ids[0]); advance(1000); tap(ids[0], '12345678');
+  rooms.updateRoom(room.id, { name: 'Renamed' });
+  venue.updateReader(ids[0], { name: 'Renamed gate' });
+  assert.equal(venue.getHistory(team.id)[0].roomName, 'First room');
+  assert.equal(venue.getHistory(team.id)[0].readerName, 'Start gate');
+  advance(1000); tap(ids[1], '12345678');
+  assert.equal(reception.getSession(team.id).roomTimes[0].stoppedAt, null);
+  assert.equal(reception.getSession(second.id).elapsedMs, 1000);
+  reception.endSession(second.id);
+  assert.deepEqual(reception.getSession(team.id).cards, ['AABBCCDD']);
+  advance(1000); tap(ids[1]); reception.endSession(team.id);
+  assert.deepEqual(venue.listLeaderboard().map(result => result.teamName), ['Second', 'Team']);
+  assert.deepEqual(venue.listLeaderboard(room.id).map(result => result.elapsedMs), [1000, 3000]);
   const result = venue.listLeaderboard()[0];
   venue.deleteLeaderboard(result.id); reception.endSession(second.id);
-  assert.equal(venue.listLeaderboard().length, 1);
+  assert.deepEqual(venue.listLeaderboard().map(result => result.teamName), ['Team']);
   assert.equal(reception.getSession(second.id).status, 'finished');
-  const expired = reception.createSession({ name: 'Expired', durationMinutes: 1 });
-  reception.startSession(expired.id); advance(60000);
-  assert.equal(venue.reconcile(), true);
-  assert.equal(venue.reconcile(), false);
-  assert.equal(reception.endSession(expired.id).status, 'expired');
-  assert.equal(venue.listLeaderboard().length, 1);
-});
-
-test('reader settings validate input and positions clamp durably on assignment and resize', t => {
-  const { venue, room, rooms } = setup(t);
-  assert.equal(venue.listReaders()[0].configured, false);
-  venue.updateReader(ids[0], { roomId: room.id, x: 1000, y: 1000 });
-  assert.equal(venue.listReaders()[0].x, 240);
-  rooms.updateRoom(room.id, { width: 120, height: 80 });
-  assert.equal(venue.listReaders()[0].x, 120);
-  assert.equal(venue.listReaders()[0].y, 80);
-  for (const input of [{ name: '' }, { role: 'bad' }, { configured: 1 }, { roomId: 'missing' }, { x: NaN }]) {
-    assert.throws(() => venue.updateReader(ids[0], input), error => error.status === 400);
-  }
-  assert.throws(() => venue.updateReader('missing', {}), error => error.status === 404);
-});
-
-test('snapshot transaction rollback restores baseline, team, visit and processed ledger', t => {
-  const { devices, venue, reception, room, team } = setup(t);
-  venue.updateReader(ids[0], { configured: true, role: 'start', roomId: room.id });
-  const send = rfid => devices.recordSnapshot({ id: ids[0], machineState: 2, rfid }, '127.0.0.1', data => venue.applySnapshot(data));
-  send({ uid: '00000000', placed: false });
-  const before = devices.listDevices();
-  assert.throws(() => devices.recordSnapshot({ id: ids[0], machineState: 2, rfid: { uid: 'AABBCCDD', placed: true } }, '127.0.0.1', data => {
-    venue.applySnapshot(data); throw new Error('Abort');
-  }), /Abort/);
-  assert.deepEqual(devices.listDevices(), before);
-  assert.equal(reception.getSession(team.id).status, 'pending');
-  assert.deepEqual(venue.getHistory(team.id), []);
-  assert.equal(devices.db.prepare('SELECT count(*) AS n FROM venue_processed_events').get().n, 0);
-  send({ uid: 'AABBCCDD', placed: true });
-  assert.equal(reception.getSession(team.id).status, 'active');
-});
-
-test('pending finish is ignored and direct recovery gap requires another placement', t => {
-  const { venue, reception, team, tap, observe, now } = setup(t);
-  venue.updateReader(ids[0], { configured: true, role: 'finish' });
-  observe(ids[0]); tap(ids[0]);
-  assert.equal(reception.getSession(team.id).status, 'pending');
-  venue.updateReader(ids[0], { role: 'start' });
-  venue.applySnapshot({ device: { id: ids[0] }, previous: { lastSeenAt: new Date(now()-30000).toISOString() },
-    event: { sequence: 500, uid: 'AABBCCDD', placed: true, type: 'rfid.placed' } });
-  assert.equal(reception.getSession(team.id).status, 'pending');
-  tap(ids[0]);
-  assert.equal(reception.getSession(team.id).status, 'active');
-  venue.reconcile({ restart: true });
-  assert.equal(reception.getSession(team.id).status, 'active');
-});
-
-test('aborted first runtime snapshot cannot establish a recovery baseline', t => {
-  const { devices, venue, reception, team } = setup(t);
-  venue.updateReader(ids[0], { configured: true, role: 'start' });
-  devices.recordSnapshot({ id: ids[0], machineState: 0, rfid: { uid: '00000000', placed: false } }, '127.0.0.1');
-  const snapshot = { id: ids[0], machineState: 0, rfid: { uid: 'AABBCCDD', placed: true } };
-  assert.throws(() => devices.recordSnapshot(snapshot, '127.0.0.1', data => {
-    venue.applySnapshot(data); throw new Error('Abort baseline');
-  }), /Abort baseline/);
-  assert.equal(devices.db.prepare('SELECT count(*) AS n FROM venue_observed_devices').get().n, 0);
-  devices.recordSnapshot(snapshot, '127.0.0.1', data => venue.applySnapshot(data));
-  assert.equal(reception.getSession(team.id).status, 'pending');
-});
-
-test('legacy controller assignments migrate once and settings/results survive reopening', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'venue-'));
-  let devices;
-  try {
-    const path = join(directory, 'state.sqlite');
-    devices = new DeviceStore(path);
-    let reception = new ReceptionStore(devices.db);
-    let rooms = new RoomStore(devices.db);
-    devices.recordDiscovery({ id: ids[0], address: '127.0.0.1' });
-    const room = rooms.createRoom({ name: 'Legacy', deviceId: ids[0] });
-    let venue = new VenueStore(devices.db);
-    assert.equal(venue.listReaders()[0].roomId, room.id);
-    venue.updateReader(ids[0], { roomId: null, configured: false });
-    const team = reception.createSession({ name: 'Persistent', durationMinutes: 60 });
-    reception.startSession(team.id); reception.endSession(team.id);
-    const result = venue.listLeaderboard()[0]; venue.deleteLeaderboard(result.id);
-    devices.close(); devices = new DeviceStore(path);
-    reception = new ReceptionStore(devices.db); rooms = new RoomStore(devices.db); venue = new VenueStore(devices.db);
-    assert.equal(venue.listReaders()[0].roomId, null);
-    assert.equal(venue.listReaders()[0].configured, false);
-    assert.equal(reception.getSession(team.id).status, 'finished');
-    assert.deepEqual(venue.listLeaderboard(), []);
-  } finally { devices?.close(); rmSync(directory, { recursive: true, force: true }); }
-});
-
-test('exit readers clear only their matching room and emit transactional domain events once', t => {
-  const { venue, reception, rooms, room, team, observe, tap } = setup(t);
-  const other = rooms.createRoom({ name: 'Other' });
-  venue.updateReader(ids[0], { configured: true, roomId: room.id, role: 'entry' });
-  venue.updateReader(ids[1], { configured: true, roomId: other.id, role: 'exit' });
-  venue.updateReader(ids[2], { configured: true, roomId: room.id, role: 'exit' });
-  for (const id of ids) observe(id);
-  reception.startSession(team.id);
-  tap(ids[0]); tap(ids[1]);
-  assert.equal(reception.getSession(team.id).currentRoomId, room.id);
-  tap(ids[2]); tap(ids[2]);
-  assert.equal(reception.getSession(team.id).currentRoomId, null);
-  assert.equal(reception.getSession(team.id).status, 'active');
-  const history = venue.getHistory(team.id);
-  assert.ok(history[0].exitedAt);
-  assert.equal(history[0].exitReason, 'reader_exit');
-  const events = venue.listDomainEvents();
-  assert.deepEqual(events.map(e => e.type), ['team.started', 'room.entered', 'room.exited', 'room.exited', 'room.exited']);
-  assert.equal(venue.listDomainEvents(events[0].sequence).length, 4);
-  tap(ids[0]);
-  venue.updateReader(ids[1], { role: 'entry' }); tap(ids[1]);
-  assert.equal(venue.getHistory(team.id)[1].exitReason, 'next_room');
-  assert.equal(venue.listDomainEvents().filter(e => e.type === 'room.exited').length, 3);
-});
-
-test('domain events and visit exit changes roll back with the firmware transaction', t => {
-  const { devices, venue, reception, room, team } = setup(t);
-  venue.updateReader(ids[0], { configured: true, roomId: room.id, role: 'entry' });
-  reception.startSession(team.id);
-  const post = (uid, placed, fail = false) => devices.recordSnapshot({ id: ids[0], machineState: 0, rfid: { uid, placed } }, '127.0.0.1', data => {
-    venue.applySnapshot(data); if (fail) throw new Error('Rollback event');
-  });
-  post('00000000', false); post('AABBCCDD', true);
-  venue.updateReader(ids[0], { role: 'exit' }); post('AABBCCDD', false);
-  assert.throws(() => post('AABBCCDD', true, true), /Rollback event/);
-  assert.equal(venue.listDomainEvents().length, 2);
-  assert.equal(venue.getHistory(team.id)[0].exitedAt, null);
-  assert.equal(reception.getSession(team.id).currentRoomId, room.id);
-  post('AABBCCDD', true);
-  assert.equal(venue.listDomainEvents().length, 3);
-});
-
-
-test('different entry readers and fresh placements trigger automation without duplicate visits',t=>{
-  const {venue,reception,room,team,observe,tap,devices}=setup(t);
-  for(const id of ids){venue.updateReader(id,{configured:true,roomId:room.id,role:'entry'});observe(id);}
-  reception.startSession(team.id);tap(ids[0]);tap(ids[1]);tap(ids[1]);
-  assert.equal(venue.getHistory(team.id).length,1);
-  assert.equal(venue.listDomainEvents().filter(e=>e.type==='room.entered').length,3);
-  venue.updateReader(ids[2],{role:'exit'});tap(ids[2]);tap(ids[2]);
-  assert.equal(venue.listDomainEvents().filter(e=>e.type==='room.exited').length,2);
-  assert.equal(venue.getHistory(team.id).length,1);
-  assert.equal(reception.getSession(team.id).status,'active');
-  const count=venue.listDomainEvents().length;
-  venue.applySnapshot({device:{id:ids[2]},previous:{lastSeenAt:new Date().toISOString()},event:{sequence:5,uid:'AABBCCDD',placed:true,type:'rfid.placed'}});
-  assert.equal(venue.listDomainEvents().length,count);
-});
-
-test('reader start and finish emit lifecycle exactly once without cancellation events', t=>{
-  const {venue,reception,room,team,observe,tap}=setup(t);
-  venue.updateReader(ids[0],{configured:true,roomId:room.id,role:'start'});
-  venue.updateReader(ids[1],{configured:true,roomId:room.id,role:'finish'});
-  observe(ids[0]);observe(ids[1]);tap(ids[0]);tap(ids[0]);tap(ids[1]);tap(ids[1]);
-  const events=venue.listDomainEvents().filter(e=>e.type.startsWith('team.'));
-  assert.deepEqual(events.map(e=>e.type),['team.started','team.ended']);
-  assert.equal(events[1].source,'finished');assert.equal(reception.getSession(team.id).status,'finished');
+  assert.equal(venue.getHistory(second.id).length, 1);
 });

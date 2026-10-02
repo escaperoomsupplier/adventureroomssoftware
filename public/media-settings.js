@@ -46,6 +46,8 @@ function removeButton(path, name) {
 const screenHeading = node('h2', 'Add screen'); screenRoot.append(screenHeading);
 const screenForm = node('form', undefined, 'ms-form'); screenRoot.append(screenForm);
 const screenName = field(screenForm, 'Screen name'); screenName.required = true; screenName.maxLength = 80;
+const screenType = field(screenForm, 'Screen type', 'select'); staticOptions(screenType, [['room','Room Screen'],['leaderboard-room','Leaderboard Room Screen'],['leaderboard-global','Leaderboard Global Screen']]);
+const resultLimit = field(screenForm, 'Number of results', 'number'); resultLimit.min=1; resultLimit.max=100; resultLimit.value=10; resultLimit.required=true;
 const screenRoom = field(screenForm, 'Screen room', 'select');
 const backgroundType = field(screenForm, 'Background', 'select'); staticOptions(backgroundType, [['color','Solid color'],['image','Image'],['video','Video']]);
 const backgroundColor = field(screenForm, 'Background color', 'color'); backgroundColor.value = '#101827';
@@ -59,6 +61,7 @@ const screenList = node('div', undefined, 'table-wrap ms-list'); screenRoot.appe
 
 function editScreen(screen) {
   screenId = screen?.id ?? null; screenHeading.textContent = screen ? `Edit ${screen.name}` : 'Add screen'; screenSave.textContent = screen ? 'Save screen' : 'Add screen';
+  screenType.value=screen?.type ?? 'room';resultLimit.value=screen?.resultLimit ?? 10;updateScreenFields();
   screenName.value = screen?.name ?? ''; screenRoom.value = screen?.roomId ?? '';
   backgroundType.value = screen?.defaults.background.type ?? 'color'; backgroundColor.value = screen?.defaults.background.color ?? '#101827';
   refreshMediaOptions(); backgroundMedia.value = screen?.defaults.background.mediaId ?? '';
@@ -66,12 +69,14 @@ function editScreen(screen) {
 }
 screenForm.addEventListener('submit', async event => {
   event.preventDefault();
-  const body = { name: screenName.value.trim(), roomId: screenRoom.value || null, defaults: {
+  const body = { type:screenType.value,resultLimit:Number(resultLimit.value),name: screenName.value.trim(), roomId: screenRoom.value || null, defaults: {
     background: { type: backgroundType.value, color: backgroundColor.value, mediaId: backgroundType.value === 'color' ? null : backgroundMedia.value || null },
     showTimers: showTimers.checked, music: { mediaId: musicMedia.value || null, volume: Number(musicVolume.value) / 100 } } };
   const result = await mutate(() => request(`/api/screens${screenId ? `/${screenId}` : ''}`, screenId ? 'PATCH' : 'POST', body), 'Screen saved.');
   if (result?.screen) editScreen(result.screen);
 });
+function updateScreenFields(){screenRoom.required=screenType.value==='leaderboard-room';resultLimit.closest('label').hidden=screenType.value==='room';showTimers.closest('label').hidden=screenType.value!=='room';}
+screenType.addEventListener('change',updateScreenFields);updateScreenFields();
 backgroundType.addEventListener('change', refreshMediaOptions);
 
 mediaRoot.append(node('h2', 'Add local media'));
@@ -175,7 +180,7 @@ const ruleHeading = node('h2', 'Add automation'); rulesRoot.append(ruleHeading);
 const ruleForm = node('form', undefined, 'ms-form'); rulesRoot.append(ruleForm);
 const ruleName = field(ruleForm, 'Automation name'); ruleName.required = true; ruleName.maxLength = 80;
 const ruleRoom = field(ruleForm, 'Trigger room', 'select'); ruleRoom.required = true;
-const ruleTrigger = field(ruleForm, 'When', 'select'); staticOptions(ruleTrigger, [['room.entered','Team uses Enter Room reader'],['room.exited','Team uses Exit Room reader'],['team.started','Team time starts'],['team.ended','Team time ends']]);
+const ruleTrigger = field(ruleForm, 'When', 'select'); staticOptions(ruleTrigger, [['room.entered','Team uses Start time reader'],['room.exited','Team uses Stop time reader'],['team.started','Team starts first room'],['team.ended','Team saved']]);
 const ruleScreen = field(ruleForm, 'Target screen', 'select'); ruleScreen.required = true;
 const actionType = field(ruleForm, 'Action', 'select'); staticOptions(actionType, [['image','Show image'],['video','Play video'],['audio','Play sound']]);
 const actionMedia = field(ruleForm, 'Action media', 'select'); actionMedia.required = true;
@@ -183,7 +188,7 @@ const actionDuration = field(ruleForm, 'Duration (seconds)', 'number'); actionDu
 const actionVolume = field(ruleForm, 'Action volume (0–100%)', 'number'); actionVolume.min = 0; actionVolume.max = 100; actionVolume.value = 100;
 const ruleEnabled = field(ruleForm, 'Automation active', 'checkbox'); ruleEnabled.checked = true;
 const ruleSave = node('button', 'Add automation'); ruleSave.type = 'submit'; ruleForm.append(ruleSave, button('New automation', () => editRule(null)));
-rulesRoot.append(node('p', 'Each action replaces the current action. Images use the configured duration; audio and video play to the end. Team time ends includes finishing manually, using a finish reader, or time expiring.', 'field-hint'));
+rulesRoot.append(node('p', 'Each action replaces the current action. Images use the configured duration; audio and video play to the end. Team saved includes finishing manually, using a finish reader, or time expiring.', 'field-hint'));
 const ruleList = node('div', undefined, 'table-wrap ms-list'); rulesRoot.append(ruleList);
 function editRule(rule) {
   ruleId = rule?.id ?? null; ruleHeading.textContent = rule ? `Edit ${rule.name}` : 'Add automation'; ruleSave.textContent = rule ? 'Save automation' : 'Add automation';
@@ -218,14 +223,14 @@ export function updateMediaSettings(next) {
   const roomItems = state.rooms.map(r => [r.id, r.name]); options(screenRoom, roomItems, 'Unassigned'); options(ruleRoom, roomItems, 'Select room');
   options(ruleScreen, state.screens.map(s => [s.id, s.name]), 'Select screen'); refreshMediaOptions();
   const roomName = id => state.rooms.find(r => r.id === id)?.name ?? 'Unassigned';
-  table(screenList, ['Screen','Room','Background',''], state.screens.map(screen => {
+  table(screenList, ['Screen','Type','Room','Background',''], state.screens.map(screen => {
     const actions = node('div', undefined, 'ms-actions'); const open = node('a', 'Open player', 'text-link'); open.href = `/screens/${screen.id}`; open.target = '_blank'; open.rel = 'noopener';
-    actions.append(button('Edit', () => editScreen(screen)), open, removeButton(`/api/screens/${screen.id}`, 'Screen')); return [screen.name, roomName(screen.roomId), screen.defaults.background.type, actions];
+    actions.append(button('Edit', () => editScreen(screen)), open, removeButton(`/api/screens/${screen.id}`, 'Screen')); return [screen.name, ({room:'Room Screen','leaderboard-room':'Leaderboard Room Screen','leaderboard-global':'Leaderboard Global Screen'})[screen.type || 'room'], roomName(screen.roomId), screen.defaults.background.type, actions];
   }), 'No screens yet. Add one here or on the map.');
   renderMedia();
   table(ruleList, ['Automation','When','Screen',''], state.rules.map(rule => {
     const actions = node('div', undefined, 'ms-actions'); actions.append(button('Edit', () => editRule(rule)), button('Test', () => mutate(() => request(`/api/screens/${rule.screenId}/preview`, 'POST', { action: rule.action }), 'Preview sent to screen.')), removeButton(`/api/screen-rules/${rule.id}`, 'Automation'));
-    return [rule.name + (rule.enabled ? '' : ' (paused)'), ({'team.started':'Team time starts','team.ended':'Team time ends'})[rule.trigger] || `${rule.trigger === 'room.entered' ? 'Enter' : 'Exit'} ${roomName(rule.roomId)}`, state.screens.find(s => s.id === rule.screenId)?.name ?? 'Unknown', actions];
+    return [rule.name + (rule.enabled ? '' : ' (paused)'), ({'team.started':'Team starts first room','team.ended':'Team saved'})[rule.trigger] || `${rule.trigger === 'room.entered' ? 'Start time in' : 'Stop time in'} ${roomName(rule.roomId)}`, state.screens.find(s => s.id === rule.screenId)?.name ?? 'Unknown', actions];
   }), 'No automations yet.');
   if (requestedScreen) { const screen = state.screens.find(s => s.id === requestedScreen); if (screen) { editScreen(screen); requestedScreen = null; } }
   if (screenId && !state.screens.some(s => s.id === screenId)) editScreen(null);

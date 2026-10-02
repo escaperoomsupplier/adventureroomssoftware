@@ -8,10 +8,18 @@ settings**, or visit `/screen-settings` to configure screens from the operator p
 The map position describes the venue layout; it does not identify or connect to a
 physical monitor automatically.
 
+Choose a screen type:
+
+- **Room Screen**: upward timers for teams that have started the assigned room.
+  Stopped times freeze and remain visible while the team is current.
+- **Leaderboard Room Screen**: saved results for its required assigned room.
+- **Leaderboard Global Screen**: saved team totals across completed rooms.
+
+Leaderboard screens have a configurable limit of 1 to 100 results, fastest first.
 A screen's defaults consist of:
 
 - A color, image or video background.
-- Team timers, enabled or disabled.
+- Room elapsed-time displays, enabled or disabled for Room Screens.
 - Optional background music and its volume.
 
 Upload media before selecting it in screen defaults or automation actions. Defaults
@@ -49,17 +57,15 @@ Image actions have a duration of **1 to 3600 seconds**. Audio and video play onc
 replaces the action currently playing on its target screen. Actions do not queue;
 legacy queue rules are normalized to replacement behavior.
 
-**Team uses Enter Room reader** fires for each fresh placement on a configured
-Enter Room reader in the selected room. **Team uses Exit Room reader** similarly
-fires for each fresh exit-reader placement. Several readers can trigger actions
-for the same room, and removing and tapping a card again can trigger another
-action without creating a duplicate room visit. Repeated state snapshots are not
-new placements. The card must belong to an active team; start/stop readers do not
-substitute for these entry/exit triggers.
+**Team uses Start time reader** runs only when a team's timer first starts in the
+selected room. **Team uses Stop time reader** runs only when that running room
+timer first stops. Duplicate placements, additional team wristbands and repeated
+snapshots do not replay these actions. Resetting the team's room times permits a
+new attempt and new first-start/first-stop actions.
 
-**Team time starts** runs when a team starts manually or through a start reader.
-**Team time ends** runs on expiry or when a running team finishes manually or
-through a stop reader. Cancelling a pending team does not trigger it.
+**Team starts first room** runs on the first room start of an attempt.
+**Team saved** runs when the operator saves the completed team. Cancel does not
+create a result or fire the save rule.
 
 When an action finishes, the screen returns to its configured defaults. The player
 reports audio/video completion; a replaced action cannot stop newer playback.

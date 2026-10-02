@@ -135,13 +135,13 @@ export class PortableConfig {
     }
     for (const reader of bundle.readers.items) {
       if (!/^[A-Za-z0-9_-]{14}$/.test(reader.id) || typeof reader.name !== 'string' || !reader.name.trim() || reader.name.trim().length > 80 ||
-          typeof reader.configured !== 'boolean' || !['entry', 'start', 'finish', 'exit'].includes(reader.role) ||
+          typeof reader.configured !== 'boolean' || !['entry', 'start', 'stop', 'finish', 'exit', 'pairing'].includes(reader.role) ||
           !Number.isInteger(reader.x) || reader.x < 0 || reader.x > 10000 || !Number.isInteger(reader.y) || reader.y < 0 || reader.y > 10000) invalid('Invalid reader configuration.');
       this.db.prepare(`INSERT OR IGNORE INTO devices(id,address,last_seen_at) VALUES(?,'','1970-01-01T00:00:00.000Z')`).run(reader.id);
       const room = reader.roomId ? this.db.prepare('SELECT width,height FROM rooms WHERE id=?').get(reader.roomId) : null;
       this.db.prepare('INSERT INTO reader_settings(device_id,name,configured,room_id,x,y,role) VALUES(?,?,?,?,?,?,?)')
         .run(reader.id, reader.name.trim(), Number(reader.configured), reader.roomId ?? null,
-          room ? Math.min(reader.x, room.width) : reader.x, room ? Math.min(reader.y, room.height) : reader.y, reader.role);
+          room ? Math.min(reader.x, room.width) : reader.x, room ? Math.min(reader.y, room.height) : reader.y, ({entry:'start',finish:'stop',exit:'stop'})[reader.role] ?? reader.role);
     }
     for (const kind of ['screens', 'rules', 'media']) for (const item of bundle[kind].items) {
       this.db.prepare('INSERT INTO configuration_items(kind,id,json) VALUES(?,?,?)').run(kind, item.id, JSON.stringify(item));

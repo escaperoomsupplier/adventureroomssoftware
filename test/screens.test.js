@@ -22,7 +22,7 @@ test('fresh events always replace immediately, duplicates do not replay and comp
   store.syncEvents([event(1,now()),event(2,now())]); assert.equal(store.screenState(screen.id).playback.id,latest.id);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM screen_playback WHERE status='queued'").get().n,0);
   clock(5000); store.reconcile(); assert.equal(store.screenState(screen.id).playback,null);
-  const teams=[{id:'a',status:'active',currentRoomId:'room-a',endsAt:new Date(now()+1000).toISOString()},{id:'b',status:'pending',currentRoomId:'room-a'}];
+  const teams=[{id:'a',status:'active',currentRoomId:'room-a',endsAt:null,roomTimes:[{roomId:'room-a',startedAt:new Date(now()).toISOString(),stoppedAt:null,elapsedMs:0}]},{id:'b',status:'pending',currentRoomId:'room-a'}];
   assert.deepEqual(store.screenState(screen.id,teams).teams.map(team=>team.id),['a']);
 });
 test('legacy queue rule normalizes durably and old pending actions never replay on restart',t=>{
@@ -88,4 +88,18 @@ test('media rename and same-kind replacement preserve references and revision ca
   assert.equal(replacement.id,'photo');assert.equal(replacement.name,'upload.png');assert.equal(replacement.revision,1);
   assert.equal(store.listRules().find(r=>r.id===rule.id).action.mediaId,'photo');
   assert.match(store.screenState(screen.id).media[0].url,/\?v=1$/);
+});
+
+test('screen types validate limits and return room count-up teams plus selected saved leaderboard',t=>{
+  const {store,screen,now}=setup(t);
+  assert.equal(screen.type,'room');assert.equal(screen.resultLimit,10);
+  assert.throws(()=>store.createScreen({name:'Ranking',type:'leaderboard-room'}),{status:400});
+  for(const resultLimit of [0,101,1.5])assert.throws(()=>store.updateScreen(screen.id,{resultLimit}),{status:400});
+  assert.throws(()=>store.updateScreen(screen.id,{type:'unknown'}),{status:400});
+  const teams=[{id:'active',teamName:'Active',status:'active',currentRoomId:null,endsAt:null,roomTimes:[{roomId:'room-a',startedAt:new Date(now()-1234).toISOString(),stoppedAt:null,elapsedMs:1234}]},{id:'other',status:'active',currentRoomId:'room-b'},{id:'pending',status:'pending',currentRoomId:'room-a'}];
+  assert.deepEqual(store.screenState(screen.id,teams).teams.map(team=>team.id),['active']);
+  store.updateScreen(screen.id,{type:'leaderboard-room',resultLimit:1});
+  const leaderboards={global:[{teamName:'Global',elapsedMs:100}],rooms:{'room-a':[{teamName:'Slow',elapsedMs:900},{teamName:'Fast',elapsedMs:200}],'room-b':[{teamName:'Other',elapsedMs:50}]}};
+  assert.deepEqual(store.screenState(screen.id,teams,leaderboards).leaderboard.map(row=>row.teamName),['Fast']);
+  store.updateScreen(screen.id,{type:'leaderboard-global',roomId:null});assert.deepEqual(store.screenState(screen.id,teams,leaderboards).leaderboard.map(row=>row.teamName),['Global']);
 });

@@ -66,7 +66,7 @@ test('copied configuration with offline JSON edits retains stable IDs, rules, me
   const f = await fixture(t);
   const { media, room, screen, rule } = await configured(f);
   const { session } = await (await write(f, '/api/reception/sessions', { name: 'Portable team', durationMinutes: 60 })).json();
-  await write(f, `/api/reception/sessions/${session.id}/start`);
+
   await f.app.close();
   const copied = join(f.directory, 'copied-config');
   await cp(f.options.configDirectory, copied, { recursive: true });
@@ -84,20 +84,20 @@ test('copied configuration with offline JSON edits retains stable IDs, rules, me
   assert.deepEqual(Buffer.from(await (await fetch(`${f.url}/media/${media.id}`)).arrayBuffer()), png);
 });
 
-test('firmware entry commits playback once and exit clears location without finishing the clock', async t => {
+test('room start commits playback once and stop completes the room without saving the team', async t => {
   const f = await fixture(t);
   const { room, screen } = await configured(f);
   await firmware(f, '00000000_0');
   await write(f, `/api/readers/${deviceId}`, { configured: true, roomId: room.id, role: 'entry' }, 'PATCH');
   const { session } = await (await write(f, '/api/reception/sessions', { name: 'Team', durationMinutes: 60 })).json();
   await write(f, `/api/reception/sessions/${session.id}/cards`, { uid: 'AABBCCDD' });
-  await write(f, `/api/reception/sessions/${session.id}/start`);
+
   const sync = f.app.screens.syncEvents;
   f.app.screens.syncEvents = function(events) { sync.call(this, events); throw new Error('Simulated playback failure'); };
   assert.equal((await firmware(f, 'AABBCCDD_1')).status, 500);
-  assert.equal(f.app.reception.getSession(session.id).status, 'active');
+  assert.equal(f.app.reception.getSession(session.id).status, 'pending');
   assert.equal(f.app.reception.getSession(session.id).currentRoomId, null);
-  assert.deepEqual(f.app.venue.listDomainEvents().map(event => event.type), ['team.started']);
+  assert.deepEqual(f.app.venue.listDomainEvents(), []);
   assert.equal(f.app.screens.screenState(screen.id).playback, null);
   f.app.screens.syncEvents = sync;
   assert.equal((await firmware(f, 'AABBCCDD_1')).status, 200);

@@ -17,7 +17,7 @@ function fixture(t){
   store.recordDiscovery({id,address:'127.0.0.1'});
   const room=config.change(()=>rooms.createRoom({name:'Room',deviceId:id}));
   config.change(()=>venue.updateReader(id,{configured:true,name:'Entry',roomId:room.id,role:'entry'}));
-  const session=reception.createSession({name:'Team',durationMinutes:60});reception.assignCard(session.id,'AABBCCDD');reception.startSession(session.id);
+  const session=reception.createSession({name:'Team',durationMinutes:60});reception.assignCard(session.id,'AABBCCDD');
   const post=(uid,placed)=>store.recordSnapshot({id,machineState:0,rfid:{uid,placed}},'127.0.0.1',data=>venue.applySnapshot(data));
   post('00000000',false);post('AABBCCDD',true);
   return {dir,store,reception,rooms,venue,config,room,session,post};
@@ -43,7 +43,7 @@ test('failed configuration change rolls removal and baseline back with JSON unto
 test('room removal protects assignments and active occupancy, retains historical visits after finish',t=>{
   const {store,venue,reception,rooms,room,session}=fixture(t);
   assert.throws(()=>rooms.deleteRoom(room.id),{status:409});venue.deleteReader(id);
-  assert.throws(()=>rooms.deleteRoom(room.id),{status:409});reception.endSession(session.id);
+  assert.throws(()=>rooms.deleteRoom(room.id),{status:409});reception.stopRoom(session.id,room);reception.endSession(session.id);
   for(const kind of ['screens','rules']){
     store.db.prepare('INSERT INTO configuration_items(kind,id,json) VALUES(?,?,?)').run(kind,'ref',JSON.stringify({id:'ref',roomId:room.id}));
     assert.throws(()=>rooms.deleteRoom(room.id),{status:409});store.db.prepare('DELETE FROM configuration_items WHERE kind=?').run(kind);

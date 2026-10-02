@@ -104,42 +104,23 @@ async function prepareVenue(app, url) {
   return { room, session };
 }
 
-test('reader roles start pending teams, record multiple rooms, finish and remove ranking without losing history', async t => {
-  const { app, url } = await fixture(t);
-  const { room, session } = await prepareVenue(app, url);
-  const live = await openLive(t, url);
-  assert.equal((await live.next()).sessions[0].status, 'pending');
-  const packet = payload('AABBCCDD_1'); packet.universal_state.machine_state = '3';
-  await firmwarePost(app.address.port, JSON.stringify(packet));
-  const started = await live.next();
-  assert.equal(started.sessions[0].status, 'active');
-  assert.equal(started.sessions[0].currentRoomId, room.id);
-  await firmwarePost(app.address.port, JSON.stringify(packet));
-  await live.next();
-  let visits = (await (await fetch(`${url}/api/reception/sessions/${session.id}/history`)).json()).visits;
-  assert.equal(visits.length, 1);
-  assert.equal(visits[0].readerName, 'Start gate');
-  const { room: next } = await (await write(url, '/api/rooms', { name: 'Archive' })).json();
-  await live.next();
-  const secondId = '0123456789ABCE';
-  await firmwarePost(app.address.port, JSON.stringify({ ...payload('00000000_0'), id: secondId }));
-  await live.next();
-  const patched = await write(url, `/api/readers/${secondId}`, { name: 'Finish gate', configured: true, roomId: next.id, role: 'finish' }, 'PATCH');
-  assert.equal((await patched.json()).reader.name, 'Finish gate'); await live.next();
-  await firmwarePost(app.address.port, JSON.stringify({ ...packet, id: secondId }));
-  const finished = await live.next();
-  assert.equal(finished.sessions[0].status, 'finished');
-  assert.equal(finished.sessions[0].currentRoomId, next.id);
-  assert.equal(finished.leaderboard.length, 1);
-  visits = (await (await fetch(`${url}/api/reception/sessions/${session.id}/history`)).json()).visits;
-  assert.deepEqual(visits.map(v => v.roomName), ['Library', 'Archive']);
-  const result = (await (await fetch(`${url}/api/leaderboard`)).json())[0];
-  assert.equal((await write(url, `/api/leaderboard/${result.id}`, {}, 'DELETE', { Origin: 'http://example.invalid' })).status, 403);
-  assert.equal((await write(url, `/api/leaderboard/${result.id}`, {}, 'DELETE')).status, 200);
-  assert.deepEqual((await live.next()).leaderboard, []);
-  await write(url, `/api/reception/sessions/${session.id}/end`); await live.next();
-  assert.deepEqual(await (await fetch(`${url}/api/leaderboard`)).json(), []);
-  assert.equal((await (await fetch(`${url}/api/reception/sessions/${session.id}/history`)).json()).visits.length, 2);
+test('first room reader transitions require explicit Save and preserve history after removing ranking', async t => {
+  const {app,url}=await fixture(t);const {room,session}=await prepareVenue(app,url);
+  await firmwarePost(app.address.port,JSON.stringify(payload('AABBCCDD_1')));
+  assert.equal(app.reception.getSession(session.id).status,'active');
+  assert.equal((await write(url,`/api/reception/sessions/${session.id}/end`)).status,409);
+  const secondId='0123456789ABCE';
+  await firmwarePost(app.address.port,JSON.stringify({...payload('00000000_0'),id:secondId}));
+  await write(url,`/api/readers/${secondId}`,{configured:true,roomId:room.id,role:'stop'},'PATCH');
+  await firmwarePost(app.address.port,JSON.stringify({...payload('AABBCCDD_1'),id:secondId}));
+  assert.equal(app.reception.getSession(session.id).status,'active');assert.equal(app.reception.getSession(session.id).currentRoomId,null);
+  assert.deepEqual(await(await fetch(url+'/api/leaderboard')).json(),[]);
+  assert.equal((await write(url,`/api/reception/sessions/${session.id}/end`)).status,200);
+  const result=(await(await fetch(url+'/api/leaderboard')).json())[0];assert.ok(result);
+  assert.equal((await write(url,`/api/leaderboard/${result.id}`,{},'DELETE',{Origin:'http://example.invalid'})).status,403);
+  assert.equal((await write(url,`/api/leaderboard/${result.id}`,{},'DELETE')).status,200);
+  await write(url,`/api/reception/sessions/${session.id}/end`);assert.deepEqual(await(await fetch(url+'/api/leaderboard')).json(),[]);
+  assert.equal((await(await fetch(url+`/api/reception/sessions/${session.id}/history`)).json()).visits.length,1);
 });
 
 test('explicit card capture suppresses gameplay, completes only after commit and rolls back on storage failure', async t => {
@@ -206,14 +187,11 @@ test('server restart preserves active timers and requires a fresh placement befo
   assert.equal(app.venue.getHistory(session.id).length, 2);
 });
 
-test('session expiry notifies live clients without further device traffic', async t => {
-  const { app, url } = await fixture(t);
-  const { session } = await prepareVenue(app, url);
-  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
-  const live = await openLive(t, url);
-  assert.equal((await live.next()).sessions[0].status, 'active');
-  app.store.db.prepare('UPDATE reception_sessions SET ends_at=? WHERE id=?').run(Date.now() - 1, session.id);
-  assert.equal((await live.next()).sessions[0].status, 'expired');
+test('legacy deadlines never expire room timers or release cards',async t=>{
+ const {app,url}=await fixture(t);const {session}=await prepareVenue(app,url);
+ await firmwarePost(app.address.port,JSON.stringify(payload('AABBCCDD_1')));
+ app.store.db.prepare('UPDATE reception_sessions SET ends_at=? WHERE id=?').run(Date.now()-1,session.id);
+ app.venue.reconcile();const team=app.reception.getSession(session.id);assert.equal(team.status,'active');assert.equal(team.endsAt,null);assert.deepEqual(team.cards,['AABBCCDD']);
 });
 
 test('restart and UDP refresh cannot arm capture until a runtime firmware baseline arrives', async t => {
@@ -273,7 +251,7 @@ test('reader partial configuration supports multiple readers per room and durabl
   const reader = (await renamed.json()).reader;
   assert.equal(reader.name, 'Side door');
   assert.equal(reader.configured, true);
-  assert.equal(reader.role, 'entry');
+  assert.equal(reader.role, 'start');
   assert.equal(reader.roomId, room.id);
   const readers = await (await fetch(`${url}/api/readers`)).json();
   assert.equal(readers.filter(item => item.roomId === room.id).length, 2);
@@ -370,13 +348,10 @@ test('reception mutations enforce card ownership and publish session updates', a
   await live.next();
   assert.equal((await post(cardPath(second.id), { uid: 'AABBCCDD' })).status, 200);
   await live.next();
-  const started = await post(`/api/reception/sessions/${second.id}/start`, {});
-  assert.equal((await started.json()).session.status, 'active');
-  await live.next();
-  const ended = await post(`/api/reception/sessions/${second.id}/end`, {});
+  const ended = await post(`/api/reception/sessions/${second.id}/cancel`, {});
   assert.equal(ended.status, 200);
   const state = await live.next();
-  assert.equal(state.sessions.find(s => s.id === second.id).status, 'finished');
+  assert.equal(state.sessions.find(s => s.id === second.id).status, 'cancelled');
   assert.deepEqual(state.sessions.find(s => s.id === second.id).cards, []);
   assert.equal((await (await fetch(`${url}/api/reception/sessions`)).json()).length, 2);
 });

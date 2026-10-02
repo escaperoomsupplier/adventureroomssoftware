@@ -106,22 +106,17 @@ as the main UUPC state.
 
 ## Reception
 
-Create a team with a name and duration. Hours and minutes are entered separately,
-with a default of **1 hour, 0 minutes** and a total range of 1 minute to 12 hours.
-A new team is **pending**: its clock does not run until the operator presses
-**Start**, or its assigned card reaches a configured start reader.
+Create a team by name. There is no preset game duration or countdown. Assign one
+or more wristbands; every card has equal access to that team's room timers.
+Select a configured **Card assignment** reader and the target team, then start
+pairing. Each new tap assigns another card until pairing is stopped. Cached RFID
+state does not assign a card. Cards reserved by another current team cannot be
+reassigned silently; release the previous binding first.
 
-To assign a wristband, select the team and a configured reader, press **Read card**,
-then remove and tap the card. Only a new placement after capture begins fills the
-UID field; a stored last reading is not silently reused. Review the UID and press
-**Assign card** to confirm. Manual entry of an eight-character hexadecimal UID is
-also supported. A team can have several wristbands. Pending and active teams
-reserve their cards; release a card before assigning it elsewhere.
-
-Starting records the session deadline in SQLite. Finishing an active team records
-its total elapsed time and releases its cards. Cancelling a pending team produces
-no completed-game result. Expiry releases reservations but is not a successful
-finish. None of these actions starts a physical puzzle or opens a door.
+Room timers count upward. **Reset** clears all of a current team's room times
+while retaining its cards. **Cancel** ends the team without ranking results.
+**Save** requires at least one completed room and no running room timer; it saves
+results and releases the cards. These operations do not control physical puzzles.
 
 ## Interactive venue map
 
@@ -154,28 +149,26 @@ player setup, media uploads and automation.
 
 ## Reader roles and team history
 
-- **Entry Room** records the active team's arrival in the assigned room.
-- **Start time** starts a pending team's session and records its room arrival when assigned.
-- **Stop time** finishes an active team's game and creates its elapsed-time result.
+- **Start time** starts the assigned room's timer on the team's first accepted tap.
+- **Stop time** stops that room's running timer on its first accepted stop tap.
+- **Card assignment** continuously assigns fresh card taps to the selected team while pairing is enabled.
 
-- **Exit Room** records departure from the assigned room without stopping the game clock.
+Start and Stop readers must be assigned to a room. Repeated Start or Stop taps,
+including taps from another wristband of the same team, do not restart a timer or
+repeat its automation. Starting another room while one is running is not allowed.
+Stop the running room before continuing. Reset clears all room times for a fresh attempt.
 
-Readers may be left unassigned to a room, for example a start or finish station.
-The team's displayed room is its last recorded arrival, not a physical occupancy check.
-Repeated snapshots and additional scans within the same room do not add duplicate
-visits. Selecting a team on Overview displays its visit history.
-
-After server startup or a detected contact gap, the first snapshot restores the
-reader baseline. Remove and tap the card again before relying on a new visit,
-start or finish. Machine-state changes such as a puzzle win do not themselves
-finish a team's game or create a leaderboard result.
+Overview shows recorded room activity, not verified physical occupancy. Team
+history records room timings. After startup or a contact gap, wait for the RFID
+baseline, then remove and tap again; recovery snapshots are not new actions.
+Machine-state changes such as a puzzle win do not automatically save a team.
 
 ## Leaderboard and readers
 
-**Leaderboard** shows completed games ordered by total elapsed time, fastest first.
-This measures time from the team's start to its finish, rather than accumulated
-puzzle times or points. Removing a result hides it from the leaderboard while
-retaining the underlying result and team history in SQLite.
+**Leaderboard** shows saved teams fastest first. Global time is the sum of completed
+room durations, excluding time spent between rooms. Room rankings use each saved
+room result. Cancelled teams have no ranking results. Removing a result hides it
+while retaining team history.
 
 **Readers** provides a compact reader list, selectable device details and the
 latest 15 RFID events. Dates represent receipt at the server. Friendly names are
@@ -215,15 +208,14 @@ WebP, MP4, WebM, MP3, WAV and OGG. See [Screens and media](docs/screens.md) for 
 and backup instructions. This remains a Node application; no desktop installer is
 included.
 
-Automations can run when team time starts or ends (including expiry), or follow fresh placements on Enter Room and Exit Room readers,
-including repeat placements and multiple readers for the same room. Room visits
-remain transition-based: these actions do not duplicate visit history. Repeated
-firmware snapshots never replay an automation action. Each new action replaces
-current playback; legacy queue rules are normalized to replacement behavior.
+Automations run once on the first accepted Start time and Stop time tap for a
+team in a room. Team-wide rules may run when the first room starts or the team is
+saved. Repeated taps and firmware snapshots do not replay actions. Reset permits
+a new attempt. New actions replace current playback.
 
 ## Current teams and history
 
 Overview shows only pending and active teams. Reception opens on **Current teams**;
-finished, expired and cancelled sessions move automatically to **History**. Search
+saved and cancelled sessions move automatically to **History**. Search
 history by team name, filter its status and browse 15 sessions per page. Visit
 history remains available without keeping old teams in the operational view.

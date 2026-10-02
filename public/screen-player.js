@@ -42,10 +42,20 @@ function render(){
     }
   }
   if(playback && playback.action.type!=='image')music.pause();else if(defaults.music.mediaId && music.paused)play(music);
-  $('timers').hidden=!defaults.showTimers || !!(playback && playback.action.type!=='audio');renderTimers();
+  $('timers').hidden=((state.screen.type || 'room')==='room' && !defaults.showTimers) || !!(playback && playback.action.type!=='audio');renderTimers();
 }
-function renderTimers(){if(!state)return;const teams=state.teams || [];const container=$('timers');const signature=JSON.stringify(teams.map(team=>[team.id,team.teamName]));if(container.dataset.signature!==signature){container.dataset.signature=signature;container.replaceChildren();for(const team of teams){const card=document.createElement('article');card.className='timer-card';const name=document.createElement('h2');name.textContent=team.teamName;const timer=document.createElement('strong');timer.dataset.team=team.id;card.append(name,timer);container.append(card);}if(!teams.length){const waiting=document.createElement('p');waiting.className='waiting';waiting.textContent='Waiting for teams';container.append(waiting);}}
-  for(const timer of container.querySelectorAll('[data-team]')){const team=teams.find(item=>item.id===timer.dataset.team);const seconds=Math.max(0,Math.ceil((Date.parse(team.endsAt)-now())/1000));timer.textContent=!connected?'—':`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;}}
+function elapsedLabel(milliseconds){const seconds=Math.max(0,Math.floor(Number(milliseconds || 0)/1000));return `${String(Math.floor(seconds/3600)).padStart(2,'0')}:${String(Math.floor(seconds/60)%60).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;}
+function renderTimers(){
+  if(!state)return;const container=$('timers'),type=state.screen.type || 'room';
+  if(type!=='room'){
+    const results=state.leaderboard || [],signature=JSON.stringify([type,state.screen.name,results]);container.classList.add('screen-leaderboard');
+    if(container.dataset.signature!==signature){container.dataset.signature=signature;container.replaceChildren();const heading=document.createElement('h1');heading.textContent=state.screen.name;container.append(heading);if(!results.length){const empty=document.createElement('p');empty.textContent='No saved results yet';container.append(empty);}for(const [index,result] of results.entries()){const row=document.createElement('div');row.className='screen-result';const rank=document.createElement('span');rank.textContent=String(index+1);const name=document.createElement('strong');name.textContent=result.teamName;const timer=document.createElement('span');timer.textContent=elapsedLabel(result.elapsedMs);row.append(rank,name,timer);container.append(row);}}
+    return;
+  }
+  container.classList.remove('screen-leaderboard');const teams=state.teams || [];const signature=JSON.stringify([type,teams.map(team=>[team.id,team.teamName])]);
+  if(container.dataset.signature!==signature){container.dataset.signature=signature;container.replaceChildren();for(const team of teams){const card=document.createElement('article');card.className='timer-card';const name=document.createElement('h2');name.textContent=team.teamName;const timer=document.createElement('strong');timer.dataset.team=team.id;card.append(name,timer);container.append(card);}if(!teams.length){const waiting=document.createElement('p');waiting.className='waiting';waiting.textContent='Waiting for teams';container.append(waiting);}}
+  for(const timer of container.querySelectorAll('[data-team]')){const team=teams.find(item=>item.id===timer.dataset.team),roomTime=team.roomTimes?.find(room=>room.roomId===state.screen.roomId);const elapsed=roomTime?(roomTime.stoppedAt?roomTime.elapsedMs:Math.max(0,now()-Date.parse(roomTime.startedAt))):0;timer.textContent=connected?elapsedLabel(elapsed):'—';}
+}
 function activate(){started=true;soundBlocked=false;$('activation').hidden=true;$('enable-sound').hidden=true;if(!document.fullscreenElement)document.documentElement.requestFullscreen?.().catch(()=>{$('enable-sound').hidden=false;});render();if(backgroundVideo)play(backgroundVideo);if(state?.playback && !completed.has(state.playback.id)){const playbackId=state.playback.id,token=actionToken,done=()=>complete(playbackId,token);if(actionVideo && seek(actionVideo,state.playback.startsAt,done))play(actionVideo,done);if(effect.hasAttribute('src') && !effect.ended && seek(effect,state.playback.startsAt,done))play(effect,done);}if(state?.screen?.defaults?.music?.mediaId && !state.playback)play(music);}
 $('start').addEventListener('click',activate);$('enable-sound').addEventListener('click',activate);
 music.addEventListener('error',()=>error('Background music unavailable.'));

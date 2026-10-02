@@ -8,9 +8,9 @@ Configuration and team actions send no commands to physical hardware.
 ## Navigation
 
 - **Overview** (`/`): interactive venue map, waiting/playing teams and their visit histories.
-- **Reception** (`/reception`): prepare teams, assign wristbands, start and finish games.
+- **Reception** (`/reception`): prepare teams, pair wristbands, reset, save or cancel teams.
   Current teams contains waiting and playing teams. History contains finished,
-  expired and cancelled sessions, with name search, status filters and 15 per page.
+  cancelled sessions, with name search, status filters and 15 per page.
 - **Leaderboard** (`/leaderboard`): completed games ordered by total elapsed time.
 - **Screen settings** (`/screen-settings`): defaults, media and screen automation. Displays open `/screens` to choose their player.
 - **Readers** (`/devices`): readers, selectable details and the latest 15 RFID events.
@@ -49,48 +49,39 @@ Neither color nor markers prove physical occupancy or puzzle readiness.
 
 ## Prepare a team and wristbands
 
-1. Enter the team name and duration using **Hours** and **Minutes**. The default
-   is 1 hour, 0 minutes; total duration must be 1 minute to 12 hours.
-2. Choose **Add team**. The team is pending and its clock has not started.
-3. Select the team and a configured reader in the wristband form.
-4. Press **Read card**, then remove and tap the wristband. A new reading fills
-   the UID field; an old last-known card is not reused automatically.
-5. Review the UID and press **Assign card**. Manual UID entry is also available.
-   Repeat for further wristbands belonging to that team.
-6. Press **Start** when the team is ready, or use a configured start reader.
+1. Enter a team name and choose **Add team**. No fixed duration is required.
+2. Select the team and a configured **Card assignment** reader.
+3. Start pairing and tap each wristband. Every fresh tap assigns another card.
+4. Stop pairing when all wristbands are assigned. All cards are equivalent.
 
-Cards reserved by another pending or active team cannot be assigned. Release a
-card to reuse it. Cancelling a pending team creates no game result. Finishing an
-active game releases its cards and creates an elapsed-time result. Expiry releases
-cards but does not count as successful completion. Deadlines persist after restart.
+Pairing continues until stopped; there is no single-card confirmation loop.
+Restarting the server stops pairing mode; start it again when needed.
+Previously cached RFID readings do not assign cards. A card reserved by another
+current team must be released before reassignment.
 
 ## Follow a game
 
-An **Entry Room** reader records an active team's arrival in its assigned room. A
-**Start time** reader starts a pending team and can also record its first room. A
-**Stop time** reader finishes an active game. Start and finish stations can be left
-unassigned to a room. All assigned rooms must be enabled for their readers' roles
-to process the scan.
+Tap a **Start time** reader assigned to a room to begin that room's upward timer.
+Tap its **Stop time** reader to stop it. Repeated taps do not restart or stop the
+timer again, and do not repeat automation. Another wristband belonging to the same
+team behaves identically. Stop the current room before starting a different room.
 
-An **Exit Room** reader records departure from its room without stopping the team clock.
+**Reset** clears all room timings and keeps the team's cards. **Cancel** ends the
+team without ranking results. **Save** requires at least one completed room and
+no running timer; it saves the results and releases the cards. Saving is an
+operator decision, separate from tapping a room's Stop reader.
 
-Overview shows the team's last recorded room. Select the team to inspect its
-visit history. Repeated snapshots do not create extra visits; further taps in the
-same room do not create another arrival until the team moves elsewhere. Removing
-a wristband from a reader does not by itself end the game.
-
-Following server startup or a known contact gap, first allow the reader baseline
-to recover, then remove and tap the card again. A recovery snapshot is not proof
-of a fresh arrival. Use existing physical room controls to operate puzzles: card
-roles manage software records only. A controller's reported win is not the same
-as finishing the whole team's game.
+The map shows recorded room activity, not verified physical occupancy. Following
+startup or a contact gap, let the reader establish its baseline, then remove and
+tap the card again. No timing operation starts hardware, resets a puzzle or opens
+a door.
 
 ## Leaderboard
 
-Completed games are listed fastest first by **total elapsed time**, from the
-team's start to its finish. This is neither a points score nor a sum of room times.
-Use **Remove** to exclude a result from the displayed leaderboard. The stored
-result and visit history are retained; removing a result does not erase the team.
+Only saved teams receive ranking results. Global time is the sum of completed
+room durations; travel and waiting between rooms are excluded. Room leaderboards
+rank the completed time for that room. Results are fastest first. Removing a
+ranking result retains the team's history.
 
 ## Diagnostics
 
@@ -130,9 +121,9 @@ Node.js 24.11 or newer is required. The simulator accepts loopback destinations 
 
 To exercise the UI, run the simulator once to discover its controller, then configure
 it as a named reader on Overview. Create a pending team, assign its synthetic UID
-`12AB34CD`, and start the team explicitly. Configure the reader's room and role for
+`12AB34CD`, then use the configured room Start and Stop readers. Configure the reader's room and role for
 the scenario being checked, then run the simulator again to produce a fresh tap.
-A start role can start a pending team; a finish role can finish an active team.
+A Start time reader starts its room timer; a Stop time reader completes that room timer. Save the team separately after all running timers stop.
 The simulator does not create rooms, teams or reader settings automatically.
 
 The `--win` option adds puzzle activity, win, repeated win and return-to-armed

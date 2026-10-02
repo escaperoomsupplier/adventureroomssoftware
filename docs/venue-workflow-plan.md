@@ -1,31 +1,16 @@
 # Venue workflow
 
-## Delivery tasks
+- Create teams by name, without a preset duration.
+- Pair multiple equivalent wristbands continuously using a selected Card assignment reader and team; stop pairing explicitly.
+- Start time and Stop time readers belong to rooms. They start and stop that team's room count-up timer once per attempt.
+- Repeated taps do not restart timers or replay automation. A different room cannot start while a room timer is running.
+- Reset clears all team room timings while retaining cards. Cancel produces no ranking results.
+- Save requires at least one completed room and no running timer. It persists room results and their sum as the global result, then releases cards.
+- Global ranking excludes time between rooms. Only saved teams appear in rankings.
+- Room Screens show room elapsed time. Leaderboard Room Screens and Leaderboard Global Screens show the fastest saved results with a configurable limit.
+- Room automation fires on the first accepted room start/stop, not every card placement. Team events represent first-room start and explicit Save.
 
-- Team lifecycle: prepare a team with a duration; assign cards before starting; start manually or at a start reader; finish manually or at a finish reader.
-- Reception: separate hours and minutes, default one hour; explicit fresh-card capture with waiting, cancellation and timeout; confirmation before assignment.
-- Reader registry: friendly names, explicit configuration, room assignment and entry/start/finish roles.
-- Venue map: grid, room positioning and resizing, reader positioning, fit-to-view lock, selection and editable details.
-- Team overview: timers, last scanned room and chronological room visits.
-- Leaderboard: completed games ranked by elapsed time; remove results without deleting team history.
-- Compact diagnostics: reader table, on-demand technical details and at most 15 recent RFID events.
-- Interface cleanup: remove old round tracking, footer slogans and redundant navigation/header status text.
-- Integration: preserve existing local data, verify HTTP/UDP transport, atomic scan processing, recovery and browser interactions.
-
-## Rules
-
-Creating a team does not start its clock. A start reader starts a prepared team once;
-further start scans do not reset the timer. Entry readers record the latest scanned
-room for active teams. Repeated scans in the same room do not duplicate a visit.
-A finish reader completes an active game; expired and cancelled games do not enter
-the leaderboard. Ranking measures total elapsed game time, not puzzle machine states.
-The latest scanned room is an indication of team location, not proof of occupancy.
-
-Explicit reception card capture consumes the selected scan for assignment rather
-than triggering a game action. A cached UID is never copied automatically. Reader
-snapshots have no durable event sequence, so restart and detected contact gaps must
-reestablish a baseline before automatic game actions resume.
-
-Implementation is split into independent changes for domain storage, reception,
-map interaction and final application integration. Each change is reviewed through
-a pull request before integration on the main branch.
+All operation is local. HTTP snapshots are deduplicated and use a fresh baseline
+after startup or a known contact gap. Pairing consumes matching new card events
+without triggering game actions. Hardware snapshots cannot reconstruct missing
+physical events. The map reflects recorded activity rather than occupancy.
