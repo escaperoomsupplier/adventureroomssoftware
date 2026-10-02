@@ -65,7 +65,7 @@ export class RoomStore {
       }
       if (exists('configuration_items')) {
         for (const row of this.db.prepare("SELECT kind,json FROM configuration_items WHERE kind IN ('screens','rules')").all()) {
-          if (JSON.parse(row.json).roomId === id) fail(409, 'Unassign screens and remove automation rules for this room before deleting it.');
+          if ([JSON.parse(row.json).roomId, JSON.parse(row.json).rankingRoomId].includes(id)) fail(409, 'Unassign screens and remove automation rules for this room before deleting it.');
         }
       }
       if (exists('room_times') && this.db.prepare(`SELECT t.session_id FROM room_times t JOIN reception_sessions s ON s.id=t.session_id

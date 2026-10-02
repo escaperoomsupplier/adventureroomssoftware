@@ -11,9 +11,15 @@ physical monitor automatically.
 Choose a screen type:
 
 - **Room Screen**: upward timers for teams that have started the assigned room.
-  Stopped times freeze and remain visible while the team is current.
-- **Leaderboard Room Screen**: saved results for its required assigned room.
+  A team disappears from the room timer display when its Stop time reader is used.
+- **Leaderboard Room Screen**: saved results for its selected **Ranking room**.
 - **Leaderboard Global Screen**: saved team totals across completed rooms.
+
+**Screen location** describes where the display is placed on the venue map.
+For a Leaderboard Room Screen, **Ranking room** independently selects which
+room results are shown and is required. A screen may physically sit in a hallway
+while showing another room's ranking. Moving the screen on the map changes its
+location without changing the ranking room.
 
 Leaderboard screens have a configurable limit of 1 to 100 results, fastest first.
 A screen's defaults consist of:

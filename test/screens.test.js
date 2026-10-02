@@ -116,3 +116,36 @@ test('Other reader automations validate configuration and match only their selec
   assert.equal(store.validateConfiguration(),true);db.exec("UPDATE reader_settings SET role='start' WHERE device_id='other-a'");assert.throws(()=>store.validateConfiguration(),{status:400});
   const changed=store.updateRule(rule.id,{trigger:'room.entered',roomId:'room-a'});assert.equal(changed.readerId,null);
 });
+
+test('room rankings select a room independently of the physical screen location', t => {
+  const { store, db } = setup(t);
+  const screen = store.createScreen({ name: 'Hall ranking', type: 'leaderboard-room', roomId: 'room-b', rankingRoomId: 'room-a' });
+  const rankings = { rooms: { 'room-a': [{ teamName: 'Selected', elapsedMs: 100 }], 'room-b': [{ teamName: 'Physical', elapsedMs: 50 }] } };
+  assert.equal(store.screenState(screen.id, [], rankings).leaderboard[0].teamName, 'Selected');
+  store.updateScreen(screen.id, { roomId: null, x: 1000, y: 1000 });
+  assert.equal(store.getScreen(screen.id).rankingRoomId, 'room-a');
+  assert.equal(store.screenState(screen.id, [], rankings).leaderboard[0].teamName, 'Selected');
+  assert.throws(() => store.updateScreen(screen.id, { rankingRoomId: null }), { status: 400 });
+  assert.throws(() => store.updateScreen(screen.id, { rankingRoomId: 'missing' }), { status: 400 });
+  store.updateScreen(screen.id, { type: 'leaderboard-global', rankingRoomId: 'room-a' });
+  assert.equal(store.getScreen(screen.id).rankingRoomId, null);
+  const legacy = { ...screen, roomId: 'room-a' }; delete legacy.rankingRoomId;
+  db.prepare("UPDATE configuration_items SET json=? WHERE kind='screens' AND id=?").run(JSON.stringify(legacy), screen.id);
+  assert.equal(store.getScreen(screen.id).rankingRoomId, 'room-a');
+  store.updateScreen(screen.id, { roomId: 'room-b' });
+  assert.equal(store.getScreen(screen.id).rankingRoomId, 'room-a');
+  assert.equal(JSON.parse(db.prepare("SELECT json FROM configuration_items WHERE kind='screens' AND id=?").get(screen.id).json).rankingRoomId, 'room-a');
+});
+
+test('stopping one room removes its screen timer while another room continues', t => {
+  const { store, screen } = setup(t);
+  const second = store.createScreen({ name: 'Second', roomId: 'room-b' });
+  const team = { id: 'team', status: 'active', roomTimes: [
+    { roomId: 'room-a', startedAt: '2026-01-01T12:00:00Z', stoppedAt: null },
+    { roomId: 'room-b', startedAt: '2026-01-01T12:00:01Z', stoppedAt: null }
+  ] };
+  assert.equal(store.screenState(screen.id, [team]).teams.length, 1);
+  team.roomTimes[0].stoppedAt = '2026-01-01T12:00:10Z';
+  assert.deepEqual(store.screenState(screen.id, [team]).teams, []);
+  assert.equal(store.screenState(second.id, [team]).teams.length, 1);
+});
