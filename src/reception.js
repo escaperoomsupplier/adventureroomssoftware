@@ -20,7 +20,9 @@ export class ReceptionStore {
     CREATE UNIQUE INDEX IF NOT EXISTS reception_current_uid
       ON reception_bindings(uid) WHERE released_at IS NULL;
     CREATE INDEX IF NOT EXISTS reception_session_bindings
-      ON reception_bindings(session_id);`);
+      ON reception_bindings(session_id);
+    CREATE TABLE IF NOT EXISTS venue_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,
+      type TEXT NOT NULL,session_id TEXT NOT NULL,room_id TEXT NOT NULL,occurred_at INTEGER NOT NULL,source TEXT NOT NULL);`);
     const columns = new Set(db.prepare('PRAGMA table_info(reception_sessions)').all().map(c => c.name));
     for (const [name, definition] of Object.entries({ pending: 'INTEGER NOT NULL DEFAULT 0', created_at: 'INTEGER',
       duration_minutes: 'INTEGER', terminal_status: 'TEXT', current_room_id: 'TEXT', current_room_name: 'TEXT', expiry_notified: 'INTEGER NOT NULL DEFAULT 0' })) {
@@ -64,6 +66,7 @@ export class ReceptionStore {
       if (status !== 'pending') fail(409, 'Only pending sessions can be started.');
       this.db.prepare('UPDATE reception_sessions SET pending=0,started_at=?,ends_at=? WHERE id=?')
         .run(time, time + row.duration_minutes * 60000, id);
+      this.#lifecycle('team.started', row, time, 'started');
       return this.#session(this.#row(id), time);
     });
   }
@@ -107,11 +110,31 @@ export class ReceptionStore {
         this.db.prepare('UPDATE reception_sessions SET ended_at=?,terminal_status=? WHERE id=?').run(time, status === 'pending' ? 'cancelled' : 'finished', sessionId);
         if (status === 'active') this.db.prepare(`INSERT OR IGNORE INTO game_results(id,session_id,team_name,started_at,finished_at,elapsed_ms)
           VALUES(?,?,?,?,?,?)`).run(randomUUID(), sessionId, row.team_name, row.started_at, time, Math.max(0, time-row.started_at));
+        if (status === 'active') this.#lifecycle('team.ended', row, time, 'finished');
         this.db.prepare('UPDATE reception_bindings SET released_at=? WHERE session_id=? AND released_at IS NULL')
           .run(time, sessionId);
       }
+      if (status === 'expired') this.reconcileExpiry();
       return this.#session(this.#row(sessionId), time);
     });
+  }
+
+  reconcileExpiry() {
+    return this.#transaction(time => {
+      const expired = this.db.prepare(`SELECT * FROM reception_sessions
+        WHERE pending=0 AND terminal_status IS NULL AND ends_at<=? AND expiry_notified=0`).all(time);
+      for (const row of expired) {
+        this.#lifecycle('team.ended', row, row.ends_at, 'expired');
+        this.db.prepare('UPDATE reception_sessions SET expiry_notified=1 WHERE id=?').run(row.id);
+        this.db.prepare('UPDATE reception_bindings SET released_at=? WHERE session_id=? AND released_at IS NULL').run(row.ends_at, row.id);
+      }
+      return expired.length > 0;
+    });
+  }
+
+  #lifecycle(type, row, time, source) {
+    this.db.prepare('INSERT OR IGNORE INTO venue_events(id,type,session_id,room_id,occurred_at,source) VALUES(?,?,?,?,?,?)')
+      .run(`${type.replace('.', '-')}-${row.id}`, type, row.id, row.current_room_id ?? '', time, source);
   }
 
   #uid(uid) {

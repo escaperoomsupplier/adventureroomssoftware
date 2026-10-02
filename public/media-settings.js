@@ -24,7 +24,7 @@ function options(select, items, placeholder = 'None') {
   if (items.some(([id]) => id === current)) select.value = current;
 }
 function staticOptions(select, items) { for (const [value, text] of items) select.add(new Option(text, value)); }
-function controls() { for (const root of roots) for (const e of root.querySelectorAll('input,select,button')) e.disabled = busy || !state.connected; }
+function controls() { for (const root of roots) for (const e of root.querySelectorAll('input,select,button')) e.disabled = e.dataset.browse === 'true' ? false : busy || !state.connected; }
 async function request(path, method = 'GET', body) {
   const response = await fetch(path, { method, headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(15000) });
   const result = await response.json(); if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`); return result;
@@ -81,6 +81,84 @@ const uploadName = field(uploadForm, 'Media name'); uploadName.maxLength = 160;
 const uploadButton = node('button', 'Upload'); uploadButton.type = 'submit'; uploadForm.append(uploadButton);
 mediaRoot.append(node('p', 'Files are stored in config/media. Supported: PNG, JPEG, GIF, WebP, MP4, WebM, MP3, WAV and OGG. Maximum 512 MB per file.', 'field-hint'));
 const mediaList = node('div', undefined, 'table-wrap ms-list'); mediaRoot.append(mediaList);
+let mediaKind = 'image', editingMediaId = null;
+const mediaUrl = media => `/media/${encodeURIComponent(media.id)}?v=${encodeURIComponent(media.revision || 0)}`;
+const mediaTabs = node('nav', undefined, 'ms-media-tabs'); mediaTabs.setAttribute('aria-label', 'Media types');
+for (const [kind, label] of [['image','Images'],['video','Videos'],['audio','Audio']]) {
+  const tab = button(label, () => { mediaKind = kind; renderMedia(); }); tab.dataset.browse = 'true'; tab.dataset.kind = kind; mediaTabs.append(tab);
+}
+mediaRoot.insertBefore(mediaTabs, mediaList);
+const previewDialog = node('dialog', undefined, 'ms-media-dialog');
+const previewTitle = node('h2'); previewTitle.id = 'ms-preview-title'; previewDialog.setAttribute('aria-labelledby', previewTitle.id);
+const previewContent = node('div', undefined, 'ms-preview-content');
+const previewClose = button('Close preview', () => previewDialog.close()); previewClose.dataset.browse = 'true';
+previewDialog.append(previewTitle, previewContent, previewClose); mediaRoot.append(previewDialog);
+function clearPreview() {
+  for (const element of previewContent.querySelectorAll('video,audio')) { element.pause(); element.removeAttribute('src'); element.load(); }
+  previewContent.replaceChildren();
+}
+previewDialog.addEventListener('close', clearPreview);
+previewDialog.addEventListener('cancel', clearPreview);
+function previewMedia(id) {
+  const media = state.media.find(item => item.id === id); if (!media) return;
+  clearPreview(); previewTitle.textContent = media.name;
+  const element = node(media.kind === 'image' ? 'img' : media.kind);
+  if (media.kind === 'image') element.alt = media.name;
+  else { element.controls = true; element.preload = 'metadata'; element.playsInline = true; element.setAttribute('playsinline',''); }
+  element.src = mediaUrl(media); previewContent.append(element); previewDialog.showModal(); previewClose.focus();
+}
+const editDialog = node('dialog', undefined, 'ms-media-dialog');
+const editTitle = node('h2', 'Edit media'); editTitle.id = 'ms-edit-title'; editDialog.setAttribute('aria-labelledby', editTitle.id);
+const editForm = node('form', undefined, 'ms-form');
+const editName = field(editForm, 'Media name'); editName.required = true; editName.maxLength = 160;
+const editFile = field(editForm, 'Replacement file (optional)', 'file'); editFile.accept = uploadFile.accept;
+const editHint = node('p', 'Existing screens and automations keep using this media. Replacement must have the same media type.', 'field-hint');
+const editStatus = node('p', '', 'ms-message'); editStatus.setAttribute('role','status');
+const editSave = node('button', 'Save media'); editSave.type = 'submit';
+const editCancel = button('Cancel', () => editDialog.close()); editCancel.dataset.browse = 'true';
+editForm.append(editHint,editStatus,editSave,editCancel); editDialog.append(editTitle,editForm); mediaRoot.append(editDialog);
+editDialog.addEventListener('close', () => { editingMediaId = null; editFile.value = ''; });
+function editMedia(id) {
+  const media = state.media.find(item => item.id === id); if (!media) return;
+  editingMediaId = id; editName.value = media.name; editFile.value = ''; editStatus.textContent = '';
+  editFile.accept = ({image:'.png,.jpg,.jpeg,.gif,.webp',video:'.mp4,.webm',audio:'.mp3,.wav,.ogg'})[media.kind];
+  controls(); editDialog.showModal(); editName.focus();
+}
+editForm.addEventListener('submit', async event => {
+  event.preventDefault(); const id = editingMediaId, media = state.media.find(item => item.id === id); if (!media) return;
+  const name = editName.value.trim(), file = editFile.files[0];
+  if (!name) { editStatus.textContent = 'Enter a media name.'; return; }
+  const extension = file?.name.split('.').pop().toLowerCase();
+  const mime = { png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',webp:'image/webp',mp4:'video/mp4',webm:'video/webm',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg' }[extension];
+  if (file && (!mime || mime.split('/')[0] !== media.kind)) { editStatus.textContent = 'Choose a supported replacement of the same media type.'; return; }
+  editStatus.textContent = file ? 'Replacing file…' : 'Saving name…';
+  const result = await mutate(async () => {
+    if (!file) return request(`/api/media/${encodeURIComponent(id)}`, 'PATCH', { name });
+    const response = await fetch(`/api/media/${encodeURIComponent(id)}/file?name=${encodeURIComponent(name)}`, { method:'POST',headers:{'Content-Type':mime},body:file,signal:AbortSignal.timeout(120000) });
+    const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Replacement failed.'); return data;
+  }, 'Media saved.');
+  if (editingMediaId !== id) return;
+  if (result) editDialog.close(); else editStatus.textContent = messages[0].textContent;
+});
+function renderMedia() {
+  for (const tab of mediaTabs.children) tab.setAttribute('aria-pressed', String(tab.dataset.kind === mediaKind));
+  for (const video of mediaList.querySelectorAll('video')) { video.pause(); video.removeAttribute('src'); video.load(); }
+  table(mediaList, ['Preview','Media','Size',''], state.media.filter(media => media.kind === mediaKind).map(media => {
+    const thumb = button('', () => previewMedia(media.id), 'ms-thumbnail'); thumb.dataset.browse = 'true'; thumb.setAttribute('aria-label', `Preview ${media.name}`);
+    if (media.kind === 'audio') thumb.append(node('span', '♫', 'ms-audio-icon'));
+    else {
+      const element = node(media.kind === 'image' ? 'img' : 'video');
+      if (media.kind === 'image') { element.alt = ''; element.loading = 'lazy'; }
+      else { element.muted = true; element.preload = 'metadata'; element.playsInline = true; element.setAttribute('playsinline',''); element.addEventListener('loadedmetadata', () => { if (Number.isFinite(element.duration) && element.duration > 0) element.currentTime = Math.min(.1,element.duration/2); }, {once:true}); }
+      element.src = mediaUrl(media); thumb.append(element);
+    }
+    const actions = node('div', undefined, 'ms-actions');
+    const preview = button('Preview', () => previewMedia(media.id)); preview.dataset.browse = 'true';
+    actions.append(preview,button('Edit', () => editMedia(media.id)),removeButton(`/api/media/${media.id}`, 'Media'));
+    return [thumb, media.name, `${(media.sizeBytes / 1024 / 1024).toFixed(2)} MB`, actions];
+  }), `No ${mediaKind === 'image' ? 'images' : mediaKind === 'video' ? 'videos' : 'audio files'} uploaded yet.`);
+  controls();
+}
 uploadForm.addEventListener('submit', async event => {
   event.preventDefault(); const file = uploadFile.files[0]; if (!file) return;
   const extension = file.name.split('.').pop().toLowerCase();
@@ -97,7 +175,7 @@ const ruleHeading = node('h2', 'Add automation'); rulesRoot.append(ruleHeading);
 const ruleForm = node('form', undefined, 'ms-form'); rulesRoot.append(ruleForm);
 const ruleName = field(ruleForm, 'Automation name'); ruleName.required = true; ruleName.maxLength = 80;
 const ruleRoom = field(ruleForm, 'Trigger room', 'select'); ruleRoom.required = true;
-const ruleTrigger = field(ruleForm, 'When', 'select'); staticOptions(ruleTrigger, [['room.entered','Team uses Enter Room reader'],['room.exited','Team uses Exit Room reader']]);
+const ruleTrigger = field(ruleForm, 'When', 'select'); staticOptions(ruleTrigger, [['room.entered','Team uses Enter Room reader'],['room.exited','Team uses Exit Room reader'],['team.started','Team time starts'],['team.ended','Team time ends']]);
 const ruleScreen = field(ruleForm, 'Target screen', 'select'); ruleScreen.required = true;
 const actionType = field(ruleForm, 'Action', 'select'); staticOptions(actionType, [['image','Show image'],['video','Play video'],['audio','Play sound']]);
 const actionMedia = field(ruleForm, 'Action media', 'select'); actionMedia.required = true;
@@ -105,21 +183,29 @@ const actionDuration = field(ruleForm, 'Duration (seconds)', 'number'); actionDu
 const actionVolume = field(ruleForm, 'Action volume (0–100%)', 'number'); actionVolume.min = 0; actionVolume.max = 100; actionVolume.value = 100;
 const ruleEnabled = field(ruleForm, 'Automation active', 'checkbox'); ruleEnabled.checked = true;
 const ruleSave = node('button', 'Add automation'); ruleSave.type = 'submit'; ruleForm.append(ruleSave, button('New automation', () => editRule(null)));
-rulesRoot.append(node('p', 'Each new action replaces the current action and returns to the screen defaults when its duration ends. Repeated reader snapshots do not replay an action.', 'field-hint'));
+rulesRoot.append(node('p', 'Each action replaces the current action. Images use the configured duration; audio and video play to the end. Team time ends includes finishing manually, using a finish reader, or time expiring.', 'field-hint'));
 const ruleList = node('div', undefined, 'table-wrap ms-list'); rulesRoot.append(ruleList);
 function editRule(rule) {
   ruleId = rule?.id ?? null; ruleHeading.textContent = rule ? `Edit ${rule.name}` : 'Add automation'; ruleSave.textContent = rule ? 'Save automation' : 'Add automation';
   ruleName.value = rule?.name ?? ''; ruleRoom.value = rule?.roomId ?? ''; ruleTrigger.value = rule?.trigger ?? 'room.entered'; ruleScreen.value = rule?.screenId ?? '';
   actionType.value = rule?.action.type ?? 'image'; refreshMediaOptions(); actionMedia.value = rule?.action.mediaId ?? '';
   actionDuration.value = rule?.action.durationSeconds ?? 10; actionVolume.value = Math.round((rule?.action.volume ?? 1) * 100); ruleEnabled.checked = rule?.enabled ?? true;
+  ruleFields();
 }
+function ruleFields() {
+  const teamTrigger = ruleTrigger.value.startsWith('team.');
+  ruleRoom.closest('label').hidden = teamTrigger; ruleRoom.required = !teamTrigger;
+  const image = actionType.value === 'image'; actionDuration.closest('label').hidden = !image; actionDuration.required = image;
+}
+ruleTrigger.addEventListener('change', ruleFields);
+actionType.addEventListener('change', ruleFields);
 actionType.addEventListener('change', refreshMediaOptions);
 ruleForm.addEventListener('submit', async event => {
   event.preventDefault();
-  const body = { name: ruleName.value.trim(), roomId: ruleRoom.value, trigger: ruleTrigger.value, screenId: ruleScreen.value,
-    action: { type: actionType.value, mediaId: actionMedia.value, durationSeconds: Number(actionDuration.value), volume: Number(actionVolume.value) / 100 }, mode: 'replace', enabled: ruleEnabled.checked };
+  const body = { name: ruleName.value.trim(), roomId: ruleTrigger.value.startsWith('team.') ? null : ruleRoom.value, trigger: ruleTrigger.value, screenId: ruleScreen.value,
+    action: { type: actionType.value, mediaId: actionMedia.value, durationSeconds: actionType.value === 'image' ? Number(actionDuration.value) : null, volume: Number(actionVolume.value) / 100 }, mode: 'replace', enabled: ruleEnabled.checked };
   const result = await mutate(() => request(`/api/screen-rules${ruleId ? `/${ruleId}` : ''}`, ruleId ? 'PATCH' : 'POST', body), 'Automation saved.');
-  if (result?.rule) editRule(result.rule);
+  if (result?.rule) editRule(null);
 });
 function refreshMediaOptions() {
   options(backgroundMedia, state.media.filter(m => m.kind === backgroundType.value).map(m => [m.id, m.name]), 'Select media');
@@ -136,19 +222,16 @@ export function updateMediaSettings(next) {
     const actions = node('div', undefined, 'ms-actions'); const open = node('a', 'Open player', 'text-link'); open.href = `/screens/${screen.id}`; open.target = '_blank'; open.rel = 'noopener';
     actions.append(button('Edit', () => editScreen(screen)), open, removeButton(`/api/screens/${screen.id}`, 'Screen')); return [screen.name, roomName(screen.roomId), screen.defaults.background.type, actions];
   }), 'No screens yet. Add one here or on the map.');
-  table(mediaList, ['Media','Type','Size','Path',''], state.media.map(media => {
-    const actions = node('div', undefined, 'ms-actions'); const open = node('a', 'Preview', 'text-link'); open.href = `/media/${media.id}`; open.target = '_blank'; open.rel = 'noopener'; actions.append(open, removeButton(`/api/media/${media.id}`, 'Media'));
-    return [media.name, media.kind, `${(media.sizeBytes / 1024 / 1024).toFixed(2)} MB`, media.path, actions];
-  }), 'No media uploaded yet.');
+  renderMedia();
   table(ruleList, ['Automation','When','Screen',''], state.rules.map(rule => {
     const actions = node('div', undefined, 'ms-actions'); actions.append(button('Edit', () => editRule(rule)), button('Test', () => mutate(() => request(`/api/screens/${rule.screenId}/preview`, 'POST', { action: rule.action }), 'Preview sent to screen.')), removeButton(`/api/screen-rules/${rule.id}`, 'Automation'));
-    return [rule.name + (rule.enabled ? '' : ' (paused)'), `${rule.trigger === 'room.entered' ? 'Enter' : 'Exit'} ${roomName(rule.roomId)}`, state.screens.find(s => s.id === rule.screenId)?.name ?? 'Unknown', actions];
+    return [rule.name + (rule.enabled ? '' : ' (paused)'), ({'team.started':'Team time starts','team.ended':'Team time ends'})[rule.trigger] || `${rule.trigger === 'room.entered' ? 'Enter' : 'Exit'} ${roomName(rule.roomId)}`, state.screens.find(s => s.id === rule.screenId)?.name ?? 'Unknown', actions];
   }), 'No automations yet.');
   if (requestedScreen) { const screen = state.screens.find(s => s.id === requestedScreen); if (screen) { editScreen(screen); requestedScreen = null; } }
   if (screenId && !state.screens.some(s => s.id === screenId)) editScreen(null);
-  if (ruleId && !state.rules.some(r => r.id === ruleId)) editRule(null);
   controls();
 }
 controls();
 
-window.addEventListener('pagechange', () => message(''));
+ruleFields();
+window.addEventListener('pagechange', () => { message(''); previewDialog.close(); clearPreview(); editDialog.close(); });

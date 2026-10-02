@@ -207,15 +207,15 @@ override values in settings for the current run.
 Configure displays at `/screen-settings`; open `/screens` to choose a display or
 `/screens/:id` to open its player. Press **Start screen** on the display for the
 initial audio/fullscreen gesture. Defaults include a color/image/video background,
-optional music and team timers. Timed actions require a duration of 1–3600 seconds
-and always replace the current action; no action queue is used.
+optional music and team timers. Image actions use a duration of 1 to 3600 seconds;
+audio and video play once to their natural end. Actions replace current playback.
 
 Media uploads are local, limited to 512 MB per file, and support PNG, JPEG, GIF,
 WebP, MP4, WebM, MP3, WAV and OGG. See [Screens and media](docs/screens.md) for setup
 and backup instructions. This remains a Node application; no desktop installer is
 included.
 
-Automation triggers follow fresh placements on Enter Room and Exit Room readers,
+Automations can run when team time starts or ends (including expiry), or follow fresh placements on Enter Room and Exit Room readers,
 including repeat placements and multiple readers for the same room. Room visits
 remain transition-based: these actions do not duplicate visit history. Repeated
 firmware snapshots never replay an automation action. Each new action replaces

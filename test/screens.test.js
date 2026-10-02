@@ -51,3 +51,41 @@ test('burst keeps only newest action, reads do not advance playback and cursor i
   assert.equal(store.screenState(screen.id).playback.id,latest.id);store.reconcile();assert.equal(store.screenState(screen.id).playback,null);
   assert.equal(new ScreenStore(db,{now}).getEventCursor(),106);
 });
+
+test('global lifecycle rules process missed expiry once and room triggers still require a room',t=>{
+  const {store,screen,action,now,db}=setup(t);
+  assert.throws(()=>store.createRule({name:'Bad',screenId:screen.id,roomId:null,trigger:'room.entered',action}),{status:400});
+  store.createRule({name:'Start',screenId:screen.id,roomId:null,trigger:'team.started',action});
+  store.createRule({name:'End',screenId:screen.id,trigger:'team.ended',action});
+  store.syncEvents([event(1,now(),{type:'team.started',source:'started',roomId:null})]);const first=store.screenState(screen.id).playback;
+  store.syncEvents([event(2,now()-120000,{type:'team.ended',source:'expired',roomId:null})]);const end=store.screenState(screen.id).playback;
+  assert.notEqual(end.id,first.id);
+  const restored=new ScreenStore(db,{now});restored.syncEvents([event(2,now(),{type:'team.ended',source:'expired',roomId:null})]);
+  assert.equal(restored.screenState(screen.id).playback.id,end.id);
+});
+test('audio and video use natural completion and reject stale completions after replacement',t=>{
+  const {store,screen,clock,now,db}=setup(t);
+  for(const kind of ['audio','video'])store.addMedia({id:kind,name:kind,kind,mimeType:`${kind}/${kind==='audio'?'mpeg':'mp4'}`,sizeBytes:10,path:`media/${kind}/${kind}.bin`});
+  const audio=store.preview(screen.id,{type:'audio',mediaId:'audio',durationSeconds:1,volume:1});
+  assert.equal(audio.endsAt,null);assert.equal(audio.action.durationSeconds,null);
+  clock(86400000);store.reconcile();assert.equal(store.screenState(screen.id).playback.id,audio.id);
+  const restored=new ScreenStore(db,{now});assert.equal(restored.screenState(screen.id).playback.endsAt,null);
+  const video=restored.preview(screen.id,{type:'video',mediaId:'video',volume:1});
+  assert.equal(restored.completePlayback(screen.id,audio.id).completed,false);
+  assert.equal(restored.screenState(screen.id).playback.id,video.id);
+  assert.equal(restored.completePlayback(screen.id,video.id).completed,true);
+  assert.equal(restored.completePlayback(screen.id,video.id).completed,false);
+  assert.equal(restored.screenState(screen.id).playback,null);
+});
+test('media rename and same-kind replacement preserve references and revision cache keys',t=>{
+  const {store,screen,action}=setup(t);
+  const rule=store.createRule({name:'Welcome',screenId:screen.id,roomId:'room-a',trigger:'room.entered',action});
+  assert.equal(store.getMedia('photo').revision,0);
+  store.updateMedia('photo',{name:'New name'});
+  const original=store.getMedia('photo');
+  assert.throws(()=>store.replaceMedia('photo',{...original,kind:'audio',mimeType:'audio/mpeg'}),{status:400});
+  const replacement=store.replaceMedia('photo',{...original,id:'upload-id',name:'upload.png',path:'media/images/replaced.png',sizeBytes:50});
+  assert.equal(replacement.id,'photo');assert.equal(replacement.name,'upload.png');assert.equal(replacement.revision,1);
+  assert.equal(store.listRules().find(r=>r.id===rule.id).action.mediaId,'photo');
+  assert.match(store.screenState(screen.id).media[0].url,/\?v=1$/);
+});
