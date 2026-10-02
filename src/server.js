@@ -107,7 +107,7 @@ export async function startServer({
     }
     return pairing;
   };
-  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: venue.listReaders(), readers: venue.listReaders(), events: store.listEvents(15), sessions: reception.listSessions(), rooms: rooms.listRooms(), leaderboard: venue.listLeaderboard(), roomLeaderboards: roomLeaderboards(), pairing: pairingState(), screens: screensWithPresence(), rules: screens.listRules(), media: screens.listMedia() })}\n\n`;
+  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: venue.listReaders(), readers: venue.listReaders(), events: store.listEvents(15), sessions: reception.listSessions(), teams: reception.listTeams(), rooms: rooms.listRooms(), leaderboard: venue.listLeaderboard(), roomLeaderboards: roomLeaderboards(), pairing: pairingState(), screens: screensWithPresence(), rules: screens.listRules(), media: screens.listMedia() })}\n\n`;
   const sendFrame = (res, frame) => {
     // Disconnect slow readers instead of allowing an unbounded outgoing queue.
     if (res.destroyed || res.writableLength > 256 * 1024) {
@@ -249,12 +249,14 @@ export async function startServer({
           if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Expected a JSON object' });
         }
         if (readerRoute && !readerRoute[2] && req.method === 'DELETE') {
+          if (screens.listRules().some(rule => rule.readerId === readerRoute[1])) return json(res, 409, {error:'Remove automation rules using this reader before deleting it.'});
           const result = changeConfiguration(() => venue.deleteReader(readerRoute[1]));
           // Captures are in memory: cancel only after configuration commits.
           captures.sweep(venue.listReaders());
           json(res, 200, result); publish(); return;
         }
         if (readerRoute && !readerRoute[2] && req.method === 'PATCH') {
+          if ((body.configured === false || body.role !== undefined && body.role !== 'other') && screens.listRules().some(rule => rule.readerId === readerRoute[1])) return json(res, 409, {error:'Remove automation rules using this reader before changing its role.'});
           const reader = changeConfiguration(() => venue.updateReader(readerRoute[1], body));
           captures.sweep(venue.listReaders());
           json(res, 200, { reader }); publish(); return;
@@ -297,6 +299,7 @@ export async function startServer({
         publish();
         return;
       }
+      if (pathname === '/api/teams' && req.method === 'GET') return json(res, 200, reception.listTeams(new URL(req.url, 'http://localhost').searchParams.get('q') ?? ''));
       if (pathname === '/api/pairing') {
         if (req.method === 'GET') return json(res, 200, { pairing: pairingState() });
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, {error:'Cross-origin changes are not allowed'});
@@ -305,7 +308,7 @@ export async function startServer({
           if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) return json(res, 415, {error:'Expected application/json'});
           const body = await readJson(req);
           const reader = venue.listReaders().find(item => item.id === body?.readerId);
-          if (!reader?.configured || reader.role !== 'pairing' || !reader.rfidBaselineEstablished) return json(res, 409, {error:'Choose an online Card assignment reader with a recent RFID baseline.'});
+          if (!reader?.configured || reader.role !== 'pairing' || Date.now()-Date.parse(reader.lastSeenAt)>25000) return json(res, 409, {error:'Choose an online Card assignment reader.'});
           const team = reception.getSession(body.sessionId);
           if (!['pending','active'].includes(team.status)) return json(res, 409, {error:'Choose a current team.'});
           pairing = {readerId:reader.id,sessionId:team.id,lastUid:null,error:null};
@@ -349,7 +352,7 @@ export async function startServer({
         } else if (route && route[2] === 'cancel' && !route[3] && req.method === 'POST') {
           session = reception.cancelSession(route[1]);
         } else if (route && route[2] === 'end' && !route[3] && req.method === 'POST') {
-          session = reception.endSession(route[1]);
+          session = reception.endSession(route[1], body);
         } else throw Object.assign(new Error('Not found'), { status: 404 });
         venue.reconcile();
         screens.syncEvents(venue.listDomainEvents(screens.getEventCursor()));
@@ -382,10 +385,14 @@ export async function startServer({
         let capture = null, pairingUpdate = null;
         const currentPairing = pairingState();
         const recorded = store.recordSnapshot(snapshot, req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? 'unknown', data => {
-          const pairingRead = currentPairing?.readerId === data.device.id && captureBaselineReady && data.event?.type === 'rfid.placed' && data.event.placed;
+          // Explicitly armed pairing may accept the first RFID snapshot after UDP discovery.
+          // Existing unchanged values never count as a new tap when arming/rearming.
+          const pairingUid = currentPairing?.readerId === data.device.id && snapshot.rfid?.placed &&
+            (data.event?.type === 'rfid.placed' || !data.previous?.lastRfid) ? snapshot.rfid.uid : null;
+          const pairingRead = pairingUid !== null;
           if (pairingRead) {
-            try { reception.assignCard(currentPairing.sessionId, data.event.uid); pairingUpdate = {...currentPairing,lastUid:data.event.uid,error:null}; }
-            catch (error) { if (error.status !== 409) throw error; pairingUpdate = {...currentPairing,lastUid:data.event.uid,error:error.message}; }
+            try { reception.assignCard(currentPairing.sessionId, pairingUid); pairingUpdate = {...currentPairing,lastUid:pairingUid,error:null}; }
+            catch (error) { if (error.status !== 409) throw error; pairingUpdate = {...currentPairing,lastUid:pairingUid,error:error.message}; }
           }
           capture = !pairingRead && captureBaselineReady ? captures.match(data) : null;
           venue.applySnapshot(capture || pairingRead ? { ...data, event: null } : data);

@@ -4,7 +4,7 @@ const node = (tag, text, cls) => { const e = document.createElement(tag); if (te
 const svgNode = (tag, attrs = {}) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const snap = value => Math.round(value / 20) * 20;
-const roles = { start: 'Start time', stop: 'Stop time', pairing: 'Card assignment' };
+const roles = { start: 'Start time', stop: 'Stop time', pairing: 'Card assignment', other: 'Other' };
 let rooms = [], readers = [], screens = [], sessions = [], connected = false, locked = true, pending = false;
 let selected = null, gesture = null, signature = '', listSignature = '', flashTimer, suppressClick = false;
 let placement = null;

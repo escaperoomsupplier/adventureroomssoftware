@@ -1,4 +1,5 @@
 import { ReceptionStore } from './reception.js';
+import { randomUUID } from 'node:crypto';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 
@@ -64,7 +65,7 @@ export class VenueStore {
       if (typeof values.name !== 'string' || !values.name.trim() || values.name.trim().length > 80) fail(400, 'Reader name must contain 1 to 80 characters.');
       if (typeof values.configured !== 'boolean') fail(400, 'Configured must be a boolean.');
       values.role = ({ entry: 'start', finish: 'stop', exit: 'stop' })[values.role] ?? values.role;
-      if (!['start', 'stop', 'pairing'].includes(values.role)) fail(400, 'Invalid reader role.');
+      if (!['start', 'stop', 'pairing', 'other'].includes(values.role)) fail(400, 'Invalid reader role.');
       for (const key of ['x', 'y']) if (!Number.isInteger(values[key]) || values[key] < 0 || values[key] > 10000) fail(400, `Invalid reader ${key}.`);
       let room = null;
       if (values.roomId !== null) {
@@ -96,8 +97,14 @@ export class VenueStore {
       if (reader.room_id && !room) return changed;
       const binding = this.db.prepare('SELECT session_id FROM reception_bindings WHERE uid=? AND released_at IS NULL').get(event.uid);
       if (!binding) return changed;
-      if (!room || reader.role === 'pairing') return changed;
       const session = this.reception.getSession(binding.session_id);
+      if (!['pending', 'active'].includes(session.status)) return changed;
+      if (reader.role === 'other') {
+        this.db.prepare('INSERT INTO venue_events(id,type,session_id,room_id,occurred_at,source,reader_id) VALUES(?,?,?,?,?,?,?)')
+          .run(randomUUID(), 'reader.used', session.id, room?.id ?? '', this.now(), 'reader', device.id);
+        return true;
+      }
+      if (!room || reader.role === 'pairing') return changed;
       if (reader.role === 'start') return this.reception.startRoom(session.id, room, { id: device.id, name: reader.name }) || changed;
       if (reader.role === 'stop') return this.reception.stopRoom(session.id, room) || changed;
       return changed;
@@ -126,16 +133,16 @@ export class VenueStore {
 
   listDomainEvents(afterSequence = 0) {
     if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) fail(400, 'Invalid event cursor.');
-    return this.db.prepare(`SELECT id,sequence,type,session_id AS sessionId,room_id AS roomId,occurred_at AS occurredAt,source
+    return this.db.prepare(`SELECT id,sequence,type,session_id AS sessionId,room_id AS roomId,reader_id AS readerId,occurred_at AS occurredAt,source
       FROM venue_events WHERE sequence>? ORDER BY sequence`).all(afterSequence)
       .map(row => ({ ...row, roomId: row.roomId || null, occurredAt: new Date(row.occurredAt).toISOString() }));
   }
 
   listLeaderboard(roomId = null) {
     const rows = roomId === null
-      ? this.db.prepare(`SELECT id,session_id AS sessionId,team_name AS teamName,started_at AS startedAt,
+      ? this.db.prepare(`SELECT id,session_id AS sessionId,team_id AS teamId,team_name AS teamName,started_at AS startedAt,
         finished_at AS finishedAt,elapsed_ms AS elapsedMs FROM game_results WHERE hidden=0 AND timing_version=1 ORDER BY elapsed_ms,finished_at,rowid`).all()
-      : this.db.prepare(`SELECT g.id,g.session_id AS sessionId,g.team_name AS teamName,r.room_id AS roomId,r.room_name AS roomName,
+      : this.db.prepare(`SELECT g.id,g.session_id AS sessionId,g.team_id AS teamId,g.team_name AS teamName,r.room_id AS roomId,r.room_name AS roomName,
         r.started_at AS startedAt,r.stopped_at AS finishedAt,r.elapsed_ms AS elapsedMs FROM room_results r JOIN game_results g ON g.id=r.result_id
         WHERE g.hidden=0 AND g.timing_version=1 AND r.room_id=? ORDER BY r.elapsed_ms,g.finished_at,r.rowid`).all(roomId);
     return rows.map(row => ({ ...row, startedAt: new Date(row.startedAt).toISOString(), finishedAt: new Date(row.finishedAt).toISOString() }));

@@ -99,3 +99,12 @@ sent a heartbeat in the last 30 seconds. Closing the last player turns the statu
 red; an interrupted network can take up to 30 seconds to expire. This indicates
 browser connectivity, not whether a television is powered on or sound is enabled.
 Reader indicators use the last 25 seconds of controller contact.
+
+## Other reader trigger
+
+Select **Team uses Other reader**, then choose a configured reader with the
+**Other** role. The rule targets that specific reader, whether it belongs to a
+room or is unassigned. Each fresh tap of a pending or active team card triggers
+the action; it neither starts nor stops any timer. Normal Start/Stop automations
+remain once per room attempt. Repeated snapshots never replay the action. Change
+or remove referencing automations before removing or changing that reader role.

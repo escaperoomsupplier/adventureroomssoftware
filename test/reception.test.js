@@ -59,3 +59,55 @@ test('legacy active sessions become pending without expiry and room timing survi
   let store=new ReceptionStore(db,{now:()=>1000});assert.equal(store.getSession('legacy').status,'pending');store.startRoom('legacy',room);
   store=new ReceptionStore(db,{now:()=>3000});assert.equal(store.getSession('legacy').status,'active');assert.equal(store.getSession('legacy').elapsedMs,2000);
 });
+
+test('returning profiles preserve identity and require explicit ranking replacement even for a better time', t => {
+  const { db, store, advance } = setup(t);
+  const first = store.createSession({ name: 'Returning' });
+  assert.throws(() => store.createSession({ teamId: first.teamId }), status(409));
+  store.startRoom(first.id, room); advance(1000); store.stopRoom(first.id, room); store.endSession(first.id);
+  const firstResult = store.listTeams('return')[0].previousResult;
+  const second = store.createSession({ teamId: first.teamId });
+  assert.equal(second.teamId, first.teamId); assert.equal(second.teamName, first.teamName);
+  assert.equal(second.previousResult.id, firstResult.id);
+  assert.equal(store.listTeams('RETURN')[0].activeSessionId, second.id);
+  store.assignCard(second.id, 'AABBCCDD'); store.startRoom(second.id, room); advance(500); store.stopRoom(second.id, room);
+  assert.throws(() => store.endSession(second.id), status(409));
+  assert.throws(() => store.endSession(second.id, { replaceResult: 'yes' }), status(400));
+  assert.equal(store.getSession(second.id).status, 'active');
+  store.endSession(second.id, { replaceResult: false });
+  let profile = store.listTeams()[0];
+  assert.equal(profile.previousResult.id, firstResult.id); assert.equal(profile.lastResult.elapsedMs, 500);
+  assert.equal(profile.bestResult.elapsedMs, 500); assert.equal(profile.activeSessionId, null);
+  const third = store.createSession({ teamId: first.teamId });
+  store.startRoom(third.id, room); advance(2000); store.stopRoom(third.id, room);
+  db.exec("CREATE TRIGGER reject_replacement BEFORE INSERT ON room_results BEGIN SELECT RAISE(ABORT,'reject replacement'); END");
+  assert.throws(() => store.endSession(third.id, { replaceResult: true }), /reject replacement/);
+  assert.equal(store.listTeams()[0].previousResult.id, firstResult.id);
+  assert.equal(store.getSession(third.id).status, 'active');
+  db.exec('DROP TRIGGER reject_replacement');
+  store.endSession(third.id, { replaceResult: true });
+  profile = store.listTeams()[0];
+  assert.equal(profile.previousResult.elapsedMs, 2000); assert.equal(profile.bestResult.elapsedMs, 500);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM game_results WHERE hidden=0').get().n, 1);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM game_results').get().n, 3);
+  assert.deepEqual(store.listTeams('absent'), []);
+  assert.throws(() => store.createSession({ teamId: 'missing' }), status(404));
+});
+
+test('profile migration keeps existing runs, cards, times and saved results and is idempotent', t => {
+  const { db, store } = setup(t);
+  const saved = store.createSession({ name: 'Same name' });
+  store.startRoom(saved.id, room); store.stopRoom(saved.id, room); store.endSession(saved.id);
+  const active = store.createSession({ name: 'Same name' }); store.assignCard(active.id, 'AABBCCDD'); store.startRoom(active.id, room);
+  const times = db.prepare('SELECT * FROM room_times ORDER BY session_id').all();
+  db.exec('UPDATE reception_sessions SET team_id=NULL; UPDATE game_results SET team_id=NULL; DELETE FROM team_profiles');
+  const migrated = new ReceptionStore(db);
+  assert.equal(migrated.getSession(saved.id).status, 'finished');
+  assert.equal(migrated.getSession(active.id).status, 'active');
+  assert.deepEqual(migrated.getSession(active.id).cards, ['AABBCCDD']);
+  assert.deepEqual(db.prepare('SELECT * FROM room_times ORDER BY session_id').all(), times);
+  assert.equal(migrated.listTeams().length, 2);
+  assert.notEqual(migrated.getSession(saved.id).teamId, migrated.getSession(active.id).teamId);
+  assert.ok(migrated.listTeams().find(team => team.id === saved.id).previousResult);
+  assert.deepEqual(new ReceptionStore(db).listTeams(), migrated.listTeams());
+});

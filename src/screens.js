@@ -47,10 +47,13 @@ export class ScreenStore {
   #rule(input) {
     if(!object(input) || !identifier(input.id)) fail(400,'Invalid rule.');
     const lifecycle=['team.started','team.ended'].includes(input.trigger);
-    const roomId=input.roomId ?? null;
-    this.#room(roomId,lifecycle);this.#get('screens',input.screenId);
-    if(!['room.entered','room.exited','team.started','team.ended'].includes(input.trigger) || !['replace','queue'].includes(input.mode) || typeof input.enabled!=='boolean') fail(400,'Invalid rule trigger, mode or enabled flag.');
-    return {id:input.id,name:name(input.name),roomId,trigger:input.trigger,screenId:input.screenId,action:this.#action(input.action),mode:'replace',enabled:input.enabled};
+    const readerTrigger=input.trigger==='reader.used';
+    const roomId=readerTrigger?null:input.roomId ?? null;
+    const readerId=readerTrigger?input.readerId:null;
+    if(readerTrigger){if(!identifier(readerId))fail(400,'Choose an Other reader.');const exists=this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='reader_settings'").get();const reader=exists?this.db.prepare('SELECT configured,role FROM reader_settings WHERE device_id=?').get(readerId):null;if(!reader?.configured || reader.role!=='other')fail(400,'Automation requires a configured Other reader.');}
+    this.#room(roomId,lifecycle || readerTrigger);this.#get('screens',input.screenId);
+    if(!['room.entered','room.exited','team.started','team.ended','reader.used'].includes(input.trigger) || !['replace','queue'].includes(input.mode) || typeof input.enabled!=='boolean') fail(400,'Invalid rule trigger, mode or enabled flag.');
+    return {id:input.id,name:name(input.name),roomId,readerId,trigger:input.trigger,screenId:input.screenId,action:this.#action(input.action),mode:'replace',enabled:input.enabled};
   }
   listScreens() { return this.#list('screens'); }
   getScreen(id) { return this.#get('screens',id); }
@@ -104,7 +107,7 @@ export class ScreenStore {
       if(!Number.isSafeInteger(event.sequence) || event.sequence<=cursor)continue;
       if(!identifier(event.id) || !Number.isFinite(Date.parse(event.occurredAt))) fail(400,'Invalid screen event.');
       const lifecycle=['team.started','team.ended'].includes(event.type);
-      if(lifecycle || event.source==='reader') for(const rule of rules) if(rule.enabled && rule.trigger===event.type && (rule.roomId===event.roomId || lifecycle && rule.roomId===null)) {
+      if(lifecycle || event.source==='reader') for(const rule of rules) if(rule.enabled && rule.trigger===event.type && (event.type==='reader.used'?rule.readerId===event.readerId:(rule.roomId===event.roomId || lifecycle && rule.roomId===null))) {
         this.#enqueue(rule.screenId,rule.action,{eventId:event.id,ruleId:rule.id,createdAt:lifecycle?this.now():Date.parse(event.occurredAt)});
         changed=true;
       }

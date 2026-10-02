@@ -1,6 +1,6 @@
 import { node, table } from './ui.js';
 
-let state = { rooms: [], screens: [], rules: [], media: [], connected: false };
+let state = { rooms: [], readers: [], screens: [], rules: [], media: [], connected: false };
 let busy = false, screenId = null, ruleId = null, signature = '';
 let requestedScreen = new URLSearchParams(location.search).get('screen');
 const screenRoot = document.getElementById('screen-settings');
@@ -180,7 +180,8 @@ const ruleHeading = node('h2', 'Add automation'); rulesRoot.append(ruleHeading);
 const ruleForm = node('form', undefined, 'ms-form'); rulesRoot.append(ruleForm);
 const ruleName = field(ruleForm, 'Automation name'); ruleName.required = true; ruleName.maxLength = 80;
 const ruleRoom = field(ruleForm, 'Trigger room', 'select'); ruleRoom.required = true;
-const ruleTrigger = field(ruleForm, 'When', 'select'); staticOptions(ruleTrigger, [['room.entered','Team uses Start time reader'],['room.exited','Team uses Stop time reader'],['team.started','Team starts first room'],['team.ended','Team saved']]);
+const ruleReader = field(ruleForm, 'Other reader', 'select');
+const ruleTrigger = field(ruleForm, 'When', 'select'); staticOptions(ruleTrigger, [['room.entered','Team uses Start time reader'],['room.exited','Team uses Stop time reader'],['team.started','Team starts first room'],['team.ended','Team saved'],['reader.used','Team uses Other reader']]);
 const ruleScreen = field(ruleForm, 'Target screen', 'select'); ruleScreen.required = true;
 const actionType = field(ruleForm, 'Action', 'select'); staticOptions(actionType, [['image','Show image'],['video','Play video'],['audio','Play sound']]);
 const actionMedia = field(ruleForm, 'Action media', 'select'); actionMedia.required = true;
@@ -188,18 +189,20 @@ const actionDuration = field(ruleForm, 'Duration (seconds)', 'number'); actionDu
 const actionVolume = field(ruleForm, 'Action volume (0–100%)', 'number'); actionVolume.min = 0; actionVolume.max = 100; actionVolume.value = 100;
 const ruleEnabled = field(ruleForm, 'Automation active', 'checkbox'); ruleEnabled.checked = true;
 const ruleSave = node('button', 'Add automation'); ruleSave.type = 'submit'; ruleForm.append(ruleSave, button('New automation', () => editRule(null)));
-rulesRoot.append(node('p', 'Each action replaces the current action. Images use the configured duration; audio and video play to the end. Team saved includes finishing manually, using a finish reader, or time expiring.', 'field-hint'));
+rulesRoot.append(node('p', 'Each action replaces the current action. Images use the configured duration; audio and video play to the end. Team saved runs only when a completed run is saved. Other readers trigger an action on each fresh team-card tap without changing timers.', 'field-hint'));
 const ruleList = node('div', undefined, 'table-wrap ms-list'); rulesRoot.append(ruleList);
 function editRule(rule) {
   ruleId = rule?.id ?? null; ruleHeading.textContent = rule ? `Edit ${rule.name}` : 'Add automation'; ruleSave.textContent = rule ? 'Save automation' : 'Add automation';
-  ruleName.value = rule?.name ?? ''; ruleRoom.value = rule?.roomId ?? ''; ruleTrigger.value = rule?.trigger ?? 'room.entered'; ruleScreen.value = rule?.screenId ?? '';
+  ruleReader.value = rule?.readerId ?? ''; ruleName.value = rule?.name ?? ''; ruleRoom.value = rule?.roomId ?? ''; ruleTrigger.value = rule?.trigger ?? 'room.entered'; ruleScreen.value = rule?.screenId ?? '';
   actionType.value = rule?.action.type ?? 'image'; refreshMediaOptions(); actionMedia.value = rule?.action.mediaId ?? '';
   actionDuration.value = rule?.action.durationSeconds ?? 10; actionVolume.value = Math.round((rule?.action.volume ?? 1) * 100); ruleEnabled.checked = rule?.enabled ?? true;
   ruleFields();
 }
 function ruleFields() {
   const teamTrigger = ruleTrigger.value.startsWith('team.');
-  ruleRoom.closest('label').hidden = teamTrigger; ruleRoom.required = !teamTrigger;
+  const readerTrigger=ruleTrigger.value==='reader.used';
+  ruleRoom.closest('label').hidden = teamTrigger || readerTrigger; ruleRoom.required = !teamTrigger && !readerTrigger;
+  ruleReader.closest('label').hidden=!readerTrigger;ruleReader.required=readerTrigger;
   const image = actionType.value === 'image'; actionDuration.closest('label').hidden = !image; actionDuration.required = image;
 }
 ruleTrigger.addEventListener('change', ruleFields);
@@ -207,7 +210,7 @@ actionType.addEventListener('change', ruleFields);
 actionType.addEventListener('change', refreshMediaOptions);
 ruleForm.addEventListener('submit', async event => {
   event.preventDefault();
-  const body = { name: ruleName.value.trim(), roomId: ruleTrigger.value.startsWith('team.') ? null : ruleRoom.value, trigger: ruleTrigger.value, screenId: ruleScreen.value,
+  const body = { name: ruleName.value.trim(), readerId:ruleTrigger.value==='reader.used'?ruleReader.value:null,roomId: ruleTrigger.value.startsWith('team.') || ruleTrigger.value==='reader.used' ? null : ruleRoom.value, trigger: ruleTrigger.value, screenId: ruleScreen.value,
     action: { type: actionType.value, mediaId: actionMedia.value, durationSeconds: actionType.value === 'image' ? Number(actionDuration.value) : null, volume: Number(actionVolume.value) / 100 }, mode: 'replace', enabled: ruleEnabled.checked };
   const result = await mutate(() => request(`/api/screen-rules${ruleId ? `/${ruleId}` : ''}`, ruleId ? 'PATCH' : 'POST', body), 'Automation saved.');
   if (result?.rule) editRule(null);
@@ -219,7 +222,8 @@ function refreshMediaOptions() {
 }
 export function updateMediaSettings(next) {
   state = { ...state, ...next }; controls();
-  const key = JSON.stringify([state.screens, state.rooms, state.rules, state.media]); if (signature === key) return; signature = key;
+  const key = JSON.stringify([state.screens, state.rooms, state.rules, state.media, state.readers.map(reader=>[reader.id,reader.name,reader.configured,reader.role])]); if (signature === key) return; signature = key;
+  options(ruleReader,state.readers.filter(reader=>reader.configured && reader.role==='other').map(reader=>[reader.id,reader.name]),'Select Other reader');
   const roomItems = state.rooms.map(r => [r.id, r.name]); options(screenRoom, roomItems, 'Unassigned'); options(ruleRoom, roomItems, 'Select room');
   options(ruleScreen, state.screens.map(s => [s.id, s.name]), 'Select screen'); refreshMediaOptions();
   const roomName = id => state.rooms.find(r => r.id === id)?.name ?? 'Unassigned';
@@ -230,7 +234,7 @@ export function updateMediaSettings(next) {
   renderMedia();
   table(ruleList, ['Automation','When','Screen',''], state.rules.map(rule => {
     const actions = node('div', undefined, 'ms-actions'); actions.append(button('Edit', () => editRule(rule)), button('Test', () => mutate(() => request(`/api/screens/${rule.screenId}/preview`, 'POST', { action: rule.action }), 'Preview sent to screen.')), removeButton(`/api/screen-rules/${rule.id}`, 'Automation'));
-    return [rule.name + (rule.enabled ? '' : ' (paused)'), ({'team.started':'Team starts first room','team.ended':'Team saved'})[rule.trigger] || `${rule.trigger === 'room.entered' ? 'Start time in' : 'Stop time in'} ${roomName(rule.roomId)}`, state.screens.find(s => s.id === rule.screenId)?.name ?? 'Unknown', actions];
+    return [rule.name + (rule.enabled ? '' : ' (paused)'), ({'team.started':'Team starts first room','team.ended':'Team saved','reader.used':`Other: ${state.readers.find(reader=>reader.id===rule.readerId)?.name || 'Unknown reader'}`})[rule.trigger] || `${rule.trigger === 'room.entered' ? 'Start time in' : 'Stop time in'} ${roomName(rule.roomId)}`, state.screens.find(s => s.id === rule.screenId)?.name ?? 'Unknown', actions];
   }), 'No automations yet.');
   if (requestedScreen) { const screen = state.screens.find(s => s.id === requestedScreen); if (screen) { editScreen(screen); requestedScreen = null; } }
   if (screenId && !state.screens.some(s => s.id === screenId)) editScreen(null);

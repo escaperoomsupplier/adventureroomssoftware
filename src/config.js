@@ -135,7 +135,7 @@ export class PortableConfig {
     }
     for (const reader of bundle.readers.items) {
       if (!/^[A-Za-z0-9_-]{14}$/.test(reader.id) || typeof reader.name !== 'string' || !reader.name.trim() || reader.name.trim().length > 80 ||
-          typeof reader.configured !== 'boolean' || !['entry', 'start', 'stop', 'finish', 'exit', 'pairing'].includes(reader.role) ||
+          typeof reader.configured !== 'boolean' || !['entry', 'start', 'stop', 'finish', 'exit', 'pairing', 'other'].includes(reader.role) ||
           !Number.isInteger(reader.x) || reader.x < 0 || reader.x > 10000 || !Number.isInteger(reader.y) || reader.y < 0 || reader.y > 10000) invalid('Invalid reader configuration.');
       this.db.prepare(`INSERT OR IGNORE INTO devices(id,address,last_seen_at) VALUES(?,'','1970-01-01T00:00:00.000Z')`).run(reader.id);
       const room = reader.roomId ? this.db.prepare('SELECT width,height FROM rooms WHERE id=?').get(reader.roomId) : null;
