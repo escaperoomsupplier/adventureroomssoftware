@@ -5,7 +5,11 @@ const teamHeading = root.querySelector('.rc-section-heading');
 teamHeading.insertAdjacentHTML('beforebegin', `<nav class="rc-team-tabs" aria-label="Team lists"><button id="rc-current-tab" type="button" aria-pressed="true">Current teams <span id="rc-current-count">0</span></button><button id="rc-history-tab" type="button" class="secondary" aria-pressed="false">History <span id="rc-history-count">0</span></button></nav>`);
 teamHeading.insertAdjacentHTML('afterend', `<div id="rc-history-filters" class="rc-history-filters" hidden><label>Search team name<input id="rc-history-search" type="search" placeholder="Search history" autocomplete="off"></label><label>Status<select id="rc-history-status"><option value="">All past teams</option><option value="finished">Finished</option><option value="cancelled">Cancelled</option></select></label></div>`);
 root.insertAdjacentHTML('beforeend', `<nav id="rc-history-pages" class="rc-history-pages" aria-label="Team history pages" hidden><button id="rc-history-previous" type="button" class="secondary">Previous</button><span id="rc-history-page" role="status"></span><button id="rc-history-next" type="button" class="secondary">Next</button></nav><section id="rc-history-details" class="rc-panel rc-history-details" aria-label="Team visit history" hidden><div class="rc-team-heading"><h2 id="rc-history-title"></h2><button id="rc-history-close" type="button" class="secondary">Close history</button></div><div id="rc-history-content" aria-live="polite"></div></section>`);
-let sessions = [], readers = [], connected = false, pending = false;
+let sessions = [], readers = [], teams = [], selectedTeamId = null, connected = false, pending = false;
+const suggestions=document.createElement('div');suggestions.className='rc-team-suggestions';$('rc-name').after(suggestions);
+const profileHint=document.createElement('p');profileHint.className='rc-hint';suggestions.after(profileHint);
+root.insertAdjacentHTML('beforeend','<dialog id="rc-result-dialog" class="rc-result-dialog" aria-labelledby="rc-result-title"><h2 id="rc-result-title">Save returning team result</h2><p id="rc-result-comparison"></p><p id="rc-result-change" role="status"></p><div class="rc-actions"><button id="rc-result-replace" type="button">Replace previous result</button><button id="rc-result-keep" type="button" class="secondary">Keep previous result</button><button id="rc-result-back" type="button" class="secondary">Back</button></div></dialog>');
+let savingSessionId=null, savingVersion='', profileSignature='';
 let listMode = 'current', historyPage = 1, historyGeneration = 0, historySessionId = null;
 const historyPageSize = 15;
 let pairing = null;
@@ -26,7 +30,11 @@ const formatDuration = (ms) => {
 function controls() {
   for (const input of root.querySelectorAll('form input,form select,form button,[data-mutation]')) input.disabled = pending || !connected;
   const pairingReader=readers.find(r=>r.id===$('rc-reader').value);
-  $('rc-pair').disabled = pending || !connected || !pairingReader || !pairingReader.rfidBaselineEstablished || Date.now()-Date.parse(pairingReader.lastSeenAt)>25000 || !sessions.some(s => s.id === $('rc-target').value && available(s));
+  $('rc-pair').disabled = pending || !connected || !pairingReader?.configured || pairingReader.role!=='pairing' || !(Date.now()-Date.parse(pairingReader.lastSeenAt)<=25000) || !sessions.some(s => s.id === $('rc-target').value && available(s));
+  $('rc-team-form').querySelector('button[type="submit"]').disabled=pending || !connected || Boolean(teams.find(t=>t.id===selectedTeamId)?.activeSessionId);
+  const saving=sessions.find(s=>s.id===savingSessionId),canSave=saving && available(saving) && saving.roomTimes?.some(t=>t.stoppedAt) && !saving.roomTimes.some(t=>!t.stoppedAt);
+  for(const id of ['rc-result-replace','rc-result-keep'])$(id).disabled=pending || !connected || !canSave;
+  $('rc-result-back').disabled=pending;
   $('rc-stop-pair').disabled = pending || !connected || !pairing;
   $('rc-pairing-status').textContent = pairing ? `${sessions.find(s=>s.id===pairing.sessionId)?.teamName || 'Selected team'} · ${readers.find(r=>r.id===pairing.readerId)?.name || 'Card reader'}: ${pairing.error || (pairing.lastUid ? `Added ${pairing.lastUid}. Tap the next wristband.` : 'Waiting for wristbands…')}` : 'Start assignment, then tap wristbands one by one. Each new card is added automatically.';
   for (const button of root.querySelectorAll('[data-save-team]')) {
@@ -89,7 +97,7 @@ function render() {
       if (!session.cards?.length) cards.append(node('p', 'No wristbands assigned.', 'rc-hint'));
       card.append(cards);
       const actions = node('div', undefined, 'rc-actions');
-      const save=action('Save', `${session.id}:save`, () => mutate(`/api/reception/sessions/${encodeURIComponent(session.id)}/end`, 'POST', {}, 'Team results saved.'), true);save.dataset.saveTeam=session.id;
+      const save=action('Save', `${session.id}:save`, () => saveTeam(session.id), true);save.dataset.saveTeam=session.id;
       actions.append(save,action('Reset time',`${session.id}:reset`,()=>mutate(`/api/reception/sessions/${encodeURIComponent(session.id)}/reset`,'POST',{},'All room times reset.')),
         action('Cancel',`${session.id}:cancel`,()=>mutate(`/api/reception/sessions/${encodeURIComponent(session.id)}/cancel`,'POST',{},'Team cancelled.')));
       card.append(actions); $('rc-teams').append(card);
@@ -214,13 +222,49 @@ async function mutate(path, method, body, message) {
   finally { pending = false; controls(); }
 }
 $('rc-target').addEventListener('change', controls);
+function renderProfiles() {
+  const query=$('rc-name').value.trim().toLocaleLowerCase();
+  const key=JSON.stringify([query,selectedTeamId,teams]);if(key===profileSignature)return;profileSignature=key;suggestions.replaceChildren();
+  const selected=teams.find(team=>team.id===selectedTeamId);
+  profileHint.textContent=selected ? `${selected.activeSessionId?'This team already has a current session. ':''}${selected.lastResult?`Last result: ${formatDuration(selected.lastResult.elapsedMs)} · ${dateTime(selected.lastResult.finishedAt)}`:'No previous result.'}` : 'Select a returning team below, or enter a new team name.';
+  if(selected || !query)return;
+  for(const team of teams.filter(item=>item.name.toLocaleLowerCase().includes(query)).slice(0,8)) {
+    const button=node('button',`${team.name}${team.activeSessionId?' · Current session':team.lastResult?` · Last ${formatDuration(team.lastResult.elapsedMs)}`:' · No result'}`,'secondary');
+    button.type='button';button.disabled=pending || !connected;button.addEventListener('click',()=>{selectedTeamId=team.id;$('rc-name').value=team.name;renderProfiles();controls();});suggestions.append(button);
+  }
+}
+$('rc-name').addEventListener('input',()=>{selectedTeamId=null;renderProfiles();controls();});
+function resultVersion(session) {return JSON.stringify([session.status,session.previousResult,session.roomTimes]);}
+function resultComparison(session) {
+  const previous=session.previousResult;
+  $('rc-result-comparison').textContent=`${session.teamName}: current total ${formatDuration(total(session))}; previous result ${previous?formatDuration(previous.elapsedMs):'no longer available'}. Keeping the previous result saves this session without replacing its ranking result.`;
+}
+async function saveTeam(id) {
+  const session=sessions.find(item=>item.id===id);if(!session || !connected || pending)return;
+  if(!session.previousResult){await mutate(`/api/reception/sessions/${encodeURIComponent(id)}/end`,'POST',{},'Team results saved.');return;}
+  savingSessionId=id;savingVersion=resultVersion(session);resultComparison(session);$('rc-result-change').textContent='';
+  $('rc-result-dialog').showModal();controls();$('rc-result-back').focus();
+}
+async function confirmResult(replaceResult) {
+  const session=sessions.find(item=>item.id===savingSessionId);if(!session || pending || !connected)return;
+  if(resultVersion(session)!==savingVersion){savingVersion=resultVersion(session);resultComparison(session);$('rc-result-change').textContent='The team or previous result changed. Review the updated comparison and choose again.';return;}
+  const result=await mutate(`/api/reception/sessions/${encodeURIComponent(session.id)}/end`,'POST',{replaceResult},replaceResult?'Previous result replaced.':'Session saved. Previous result kept.');
+  if(result)$('rc-result-dialog').close();else $('rc-result-change').textContent=$('rc-error').textContent;
+}
+$('rc-result-replace').addEventListener('click',()=>confirmResult(true));
+$('rc-result-keep').addEventListener('click',()=>confirmResult(false));
+$('rc-result-back').addEventListener('click',()=>$('rc-result-dialog').close());
+$('rc-result-dialog').addEventListener('close',()=>{savingSessionId=null;});
+$('rc-result-dialog').addEventListener('cancel',event=>{if(pending)event.preventDefault();});
 $('rc-reader').addEventListener('change', controls);
-window.addEventListener('pagechange', event => { if (event.detail?.page !== 'reception') closeHistory(); });
+window.addEventListener('pagechange', event => { if (event.detail?.page !== 'reception') {closeHistory();$('rc-result-dialog').close();} });
 $('rc-team-form').addEventListener('submit', async event => {
   event.preventDefault(); const name = $('rc-name').value.trim();
   if (!name) { showError(new Error('Enter a team name.')); return; }
-  const result = await mutate('/api/reception/sessions', 'POST', { name }, 'Team added. Assign wristbands to begin.');
-  if (result?.session) { $('rc-name').value = ''; $('rc-target').value = result.session.id; controls(); }
+  const selected=teams.find(team=>team.id===selectedTeamId);
+  if(selected?.activeSessionId){showError(new Error('This team already has a current session.'));return;}
+  const result = await mutate('/api/reception/sessions', 'POST', selectedTeamId?{teamId:selectedTeamId}:{ name }, 'Team added. Assign wristbands to begin.');
+  if (result?.session) { selectedTeamId=null;$('rc-name').value = ''; $('rc-target').value = result.session.id;renderProfiles(); controls(); }
 });
 $('rc-card-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -235,6 +279,7 @@ $('rc-stop-pair').addEventListener('click', async () => {
 export function updateReception(state = {}) {
   if (state.sessions) sessions = state.sessions;
   if (state.readers) readers = state.readers;
+  if (state.teams) {teams=state.teams;if(selectedTeamId && !teams.some(team=>team.id===selectedTeamId))selectedTeamId=null;renderProfiles();}
   if ('pairing' in state) pairing = state.pairing;
   connected = state.connected ?? connected;
   options('rc-reader', readers.filter(reader => reader.configured && reader.role==='pairing' && Date.now()-Date.parse(reader.lastSeenAt)<=25000).map(reader => [reader.id, reader.name]), 'Select an online pairing reader');

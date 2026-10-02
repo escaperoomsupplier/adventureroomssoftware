@@ -40,3 +40,4 @@
 #rc-history-content { overflow:auto; margin-top:16px; }
 @media(max-width:800px) { .rc-layout { grid-template-columns:1fr; } .rc-section-heading { align-items:flex-start; flex-direction:column; } #rc-teams { grid-template-columns:1fr; } }
 .rc-room-times{display:grid;gap:8px;margin-bottom:16px}.rc-room-time{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid #edf1f4;padding-bottom:8px;font-size:12px}.rc-room-time span{font-variant-numeric:tabular-nums}.rc-room-time strong{overflow-wrap:anywhere}
+.rc-team-suggestions{display:grid;gap:6px;margin-top:8px}.rc-team-suggestions button{text-align:left;margin-top:0!important}.rc-result-dialog{width:min(560px,calc(100vw - 32px));border:1px solid #d6e0e7;border-radius:14px;padding:24px;color:#192b3e}.rc-result-dialog::backdrop{background:#14263888}.rc-result-dialog p{line-height:1.6;font-size:14px}.rc-result-dialog .rc-actions{margin-top:20px}

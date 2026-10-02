@@ -180,3 +180,20 @@ discovered again as an unconfigured reader.
 Rooms with assigned readers, screens, automation rules or active occupants cannot
 be deleted until those references are moved or cleared. Screen deletion remains
 blocked while an automation references it. Historical visits are retained.
+
+## Returning teams and pairing
+
+Search for an existing team by name before creating another. Reuse the same team
+identity for a new run; each run has independent room times and history. When
+saving a later result, choose whether to keep the previous ranking result or
+replace it with the new one. A new run does not silently erase an earlier result.
+
+Choose an online Card assignment reader for continuous pairing. UDP contact is
+enough to arm assignment; the next first HTTP card snapshot can assign a card.
+An unchanged RFID value already known before assignment was armed is not replayed.
+Stop pairing when all cards are registered.
+
+An **Other** reader has no timing effect. Its configured automation may play media
+on a selected screen whenever an assigned team card is newly tapped. Repeated
+firmware snapshots do not count as new taps. Other readers may be unassigned to a
+room; each rule names the exact reader.

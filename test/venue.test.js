@@ -197,3 +197,34 @@ test('teams share readers without sharing timing, names snapshot and rankings so
   assert.equal(reception.getSession(second.id).status, 'finished');
   assert.equal(venue.getHistory(second.id).length, 1);
 });
+
+test('Other readers emit reader-specific events per fresh placement without changing timing', t => {
+  const { devices, venue, reception, team, observe, now } = setup(t);
+  venue.updateReader(ids[0], { configured: true, role: 'other', roomId: null });
+  const event = sequence => ({ device: { id: ids[0] }, previous: { lastSeenAt: new Date(now()).toISOString() },
+    event: { sequence, uid: 'AABBCCDD', placed: true, type: 'rfid.placed' } });
+  venue.applySnapshot(event(100)); assert.deepEqual(venue.listDomainEvents(), []);
+  venue.applySnapshot(event(101)); venue.applySnapshot(event(101));
+  let events = venue.listDomainEvents();
+  assert.equal(events.length, 1); assert.equal(events[0].type, 'reader.used');
+  assert.equal(events[0].readerId, ids[0]); assert.equal(events[0].roomId, null);
+  assert.equal(events[0].sessionId, team.id); assert.equal(reception.getSession(team.id).status, 'pending');
+  assert.deepEqual(reception.getSession(team.id).roomTimes, []);
+  devices.db.exec('SAVEPOINT test_event'); venue.applySnapshot(event(102));
+  devices.db.exec('ROLLBACK TO test_event; RELEASE test_event');
+  assert.equal(venue.listDomainEvents().length, 1);
+  venue.applySnapshot(event(102)); assert.equal(venue.listDomainEvents().length, 2);
+  venue.reconcile({ restart: true }); venue.applySnapshot(event(103)); assert.equal(venue.listDomainEvents().length, 2);
+  reception.cancelSession(team.id); observe(ids[0]); venue.applySnapshot(event(104)); assert.equal(venue.listDomainEvents().length, 2);
+});
+
+test('returning profile replacement changes global and room rankings together without deleting history', t => {
+  const { reception, venue, team, room, advance } = setup(t);
+  reception.startRoom(team.id, room); advance(100); reception.stopRoom(team.id, room); reception.endSession(team.id);
+  const second = reception.createSession({ teamId: team.teamId });
+  reception.startRoom(second.id, room); advance(200); reception.stopRoom(second.id, room);
+  reception.endSession(second.id, { replaceResult: true });
+  assert.deepEqual(venue.listLeaderboard().map(result => [result.teamId, result.elapsedMs]), [[team.teamId, 200]]);
+  assert.deepEqual(venue.listLeaderboard(room.id).map(result => result.elapsedMs), [200]);
+  assert.equal(venue.getHistory(team.id).length, 1); assert.equal(venue.getHistory(second.id).length, 1);
+});

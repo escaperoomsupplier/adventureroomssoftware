@@ -103,3 +103,16 @@ test('screen types validate limits and return room count-up teams plus selected 
   assert.deepEqual(store.screenState(screen.id,teams,leaderboards).leaderboard.map(row=>row.teamName),['Fast']);
   store.updateScreen(screen.id,{type:'leaderboard-global',roomId:null});assert.deepEqual(store.screenState(screen.id,teams,leaderboards).leaderboard.map(row=>row.teamName),['Global']);
 });
+
+test('Other reader automations validate configuration and match only their selected reader',t=>{
+  const {store,screen,action,db,now}=setup(t);
+  db.exec("CREATE TABLE reader_settings(device_id TEXT PRIMARY KEY,configured INTEGER,role TEXT);INSERT INTO reader_settings VALUES('other-a',1,'other'),('other-b',1,'other'),('start-a',1,'start'),('hidden',0,'other')");
+  const input={name:'Other action',trigger:'reader.used',readerId:'other-a',roomId:'room-a',screenId:screen.id,action};
+  for(const readerId of ['missing','start-a','hidden',null])assert.throws(()=>store.createRule({...input,readerId}),{status:400});
+  const rule=store.createRule(input);assert.equal(rule.roomId,null);assert.equal(rule.readerId,'other-a');
+  store.syncEvents([event(1,now(),{type:'reader.used',readerId:'other-b',roomId:null})]);assert.equal(store.screenState(screen.id).playback,null);
+  store.syncEvents([event(2,now(),{type:'reader.used',readerId:'other-a',roomId:null})]);const first=store.screenState(screen.id).playback;assert.ok(first);
+  store.syncEvents([event(3,now(),{type:'reader.used',readerId:'other-a',roomId:'room-b'})]);assert.notEqual(store.screenState(screen.id).playback.id,first.id);
+  assert.equal(store.validateConfiguration(),true);db.exec("UPDATE reader_settings SET role='start' WHERE device_id='other-a'");assert.throws(()=>store.validateConfiguration(),{status:400});
+  const changed=store.updateRule(rule.id,{trigger:'room.entered',roomId:'room-a'});assert.equal(changed.readerId,null);
+});

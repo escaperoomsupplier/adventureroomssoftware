@@ -25,7 +25,7 @@ export class ReceptionStore {
       type TEXT NOT NULL,session_id TEXT NOT NULL,room_id TEXT NOT NULL,occurred_at INTEGER NOT NULL,source TEXT NOT NULL);`);
     const columns = new Set(db.prepare('PRAGMA table_info(reception_sessions)').all().map(c => c.name));
     for (const [name, definition] of Object.entries({ pending: 'INTEGER NOT NULL DEFAULT 0', created_at: 'INTEGER',
-      duration_minutes: 'INTEGER', terminal_status: 'TEXT', current_room_id: 'TEXT', current_room_name: 'TEXT', expiry_notified: 'INTEGER NOT NULL DEFAULT 0' })) {
+      duration_minutes: 'INTEGER', terminal_status: 'TEXT', current_room_id: 'TEXT', current_room_name: 'TEXT', expiry_notified: 'INTEGER NOT NULL DEFAULT 0', team_id: 'TEXT' })) {
       if (!columns.has(name)) db.exec(`ALTER TABLE reception_sessions ADD COLUMN ${name} ${definition}`);
     }
     db.exec(`UPDATE reception_sessions SET created_at=started_at WHERE created_at IS NULL;
@@ -37,6 +37,14 @@ export class ReceptionStore {
         team_name TEXT NOT NULL,started_at INTEGER NOT NULL,finished_at INTEGER NOT NULL,elapsed_ms INTEGER NOT NULL,hidden INTEGER NOT NULL DEFAULT 0);`);
     const resultColumns = new Set(db.prepare('PRAGMA table_info(game_results)').all().map(c => c.name));
     if (!resultColumns.has('timing_version')) db.exec('ALTER TABLE game_results ADD COLUMN timing_version INTEGER NOT NULL DEFAULT 0');
+    if (!resultColumns.has('team_id')) db.exec('ALTER TABLE game_results ADD COLUMN team_id TEXT');
+    if (!db.prepare('PRAGMA table_info(venue_events)').all().some(column => column.name === 'reader_id')) db.exec('ALTER TABLE venue_events ADD COLUMN reader_id TEXT');
+    db.exec(`CREATE TABLE IF NOT EXISTS team_profiles(id TEXT PRIMARY KEY,name TEXT NOT NULL,created_at INTEGER NOT NULL);
+      INSERT OR IGNORE INTO team_profiles(id,name,created_at) SELECT id,team_name,created_at FROM reception_sessions WHERE team_id IS NULL;
+      UPDATE reception_sessions SET team_id=id WHERE team_id IS NULL;
+      UPDATE game_results SET team_id=(SELECT team_id FROM reception_sessions WHERE id=game_results.session_id) WHERE team_id IS NULL;
+      CREATE INDEX IF NOT EXISTS reception_team_id ON reception_sessions(team_id);
+      CREATE INDEX IF NOT EXISTS results_team_id ON game_results(team_id);`);
     db.exec(`CREATE TABLE IF NOT EXISTS room_results(id TEXT PRIMARY KEY,result_id TEXT NOT NULL REFERENCES game_results(id),
       room_id TEXT NOT NULL,room_name TEXT NOT NULL,started_at INTEGER NOT NULL,stopped_at INTEGER NOT NULL,elapsed_ms INTEGER NOT NULL);
       UPDATE reception_sessions SET pending=1,current_room_id=NULL,current_room_name=NULL
@@ -44,13 +52,24 @@ export class ReceptionStore {
   }
 
   createSession(input) {
-    if (!input || typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 80) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'Invalid team.');
+    if (input.teamId !== undefined && (typeof input.teamId !== 'string' || !input.teamId || input.teamId.length > 128)) fail(400, 'Invalid team ID.');
+    if (input.teamId === undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 80)) {
       fail(400, 'Team name must contain 1 to 80 characters.');
     }
     return this.#transaction(time => {
       const id = randomUUID();
-      this.db.prepare(`INSERT INTO reception_sessions(id,team_name,started_at,ends_at,pending,created_at,duration_minutes) VALUES(?,?,?,?,1,?,?)`)
-        .run(id, input.name.trim(), time, time, time, 0);
+      let profile;
+      if (input.teamId !== undefined) {
+        profile = this.db.prepare('SELECT * FROM team_profiles WHERE id=?').get(input.teamId);
+        if (!profile) fail(404, 'Team not found.');
+        if (this.db.prepare('SELECT id FROM reception_sessions WHERE team_id=? AND terminal_status IS NULL').get(profile.id)) fail(409, 'This team already has a pending or active run.');
+      } else {
+        profile = { id: randomUUID(), name: input.name.trim() };
+        this.db.prepare('INSERT INTO team_profiles(id,name,created_at) VALUES(?,?,?)').run(profile.id, profile.name, time);
+      }
+      this.db.prepare(`INSERT INTO reception_sessions(id,team_name,started_at,ends_at,pending,created_at,duration_minutes,team_id) VALUES(?,?,?,?,1,?,?,?)`)
+        .run(id, profile.name, time, time, time, 0, profile.id);
       return this.#session(this.#row(id), time);
     });
   }
@@ -62,6 +81,25 @@ export class ReceptionStore {
   }
 
   getSession(id) { return this.#session(this.#row(id), this.now()); }
+
+  listTeams(query = '') {
+    if (typeof query !== 'string' || query.length > 200) fail(400, 'Invalid team search.');
+    const search = query.trim().toLocaleLowerCase();
+    return this.db.prepare('SELECT * FROM team_profiles ORDER BY name COLLATE NOCASE,id').all()
+      .filter(profile => profile.name.toLocaleLowerCase().includes(search))
+      .map(profile => ({ id: profile.id, name: profile.name,
+        lastResult: this.#teamResult(profile.id, 'finished_at DESC,rowid DESC'),
+        bestResult: this.#teamResult(profile.id, 'elapsed_ms,finished_at,rowid'),
+        previousResult: this.#teamResult(profile.id, 'finished_at DESC,rowid DESC', true),
+        activeSessionId: this.db.prepare('SELECT id FROM reception_sessions WHERE team_id=? AND terminal_status IS NULL ORDER BY created_at DESC,rowid DESC LIMIT 1').get(profile.id)?.id ?? null }));
+  }
+
+  #teamResult(teamId, order, visible = false, excludeSessionId = '') {
+    const result = this.db.prepare(`SELECT id,session_id AS sessionId,team_id AS teamId,elapsed_ms AS elapsedMs,
+      finished_at AS finishedAt,hidden FROM game_results WHERE team_id=? AND timing_version=1 AND session_id<>?
+      ${visible ? 'AND hidden=0' : ''} ORDER BY ${order} LIMIT 1`).get(teamId, excludeSessionId);
+    return result ? { ...result, hidden: Boolean(result.hidden), finishedAt: new Date(result.finishedAt).toISOString() } : null;
+  }
 
   startSession(id, room, reader) {
     if (!room) fail(409, 'Start a room using its start reader.');
@@ -138,7 +176,8 @@ export class ReceptionStore {
     });
   }
 
-  endSession(sessionId) {
+  endSession(sessionId, options = {}) {
+    if (!options || typeof options !== 'object' || Array.isArray(options) || (options.replaceResult !== undefined && typeof options.replaceResult !== 'boolean')) fail(400, 'Replace result must be a boolean.');
     return this.#transaction(time => {
       const row = this.#row(sessionId);
       const status = this.#status(row, time);
@@ -146,10 +185,13 @@ export class ReceptionStore {
       if (status !== 'active') fail(409, 'Only a team with completed room times can be saved.');
       const times = this.db.prepare('SELECT * FROM room_times WHERE session_id=?').all(sessionId);
       if (!times.length || times.some(room => room.stopped_at === null)) fail(409, 'Complete at least one room and stop every running room timer before saving.');
+      const previous = this.#teamResult(row.team_id, 'finished_at DESC,rowid DESC', true, sessionId);
+      if (previous && typeof options.replaceResult !== 'boolean') fail(409, 'This team has a saved ranking. Choose whether to replace it or keep the previous result.');
+      if (previous && options.replaceResult) this.db.prepare('UPDATE game_results SET hidden=1 WHERE team_id=? AND hidden=0').run(row.team_id);
       const resultId = randomUUID();
       this.db.prepare('UPDATE reception_sessions SET ended_at=?,terminal_status=\'finished\' WHERE id=?').run(time, sessionId);
-      this.db.prepare(`INSERT INTO game_results(id,session_id,team_name,started_at,finished_at,elapsed_ms,timing_version)
-        VALUES(?,?,?,?,?,?,1)`).run(resultId, sessionId, row.team_name, row.started_at, time, times.reduce((sum, room) => sum + Math.max(0, room.stopped_at-room.started_at), 0));
+      this.db.prepare(`INSERT INTO game_results(id,session_id,team_name,started_at,finished_at,elapsed_ms,timing_version,team_id,hidden)
+        VALUES(?,?,?,?,?,?,1,?,?)`).run(resultId, sessionId, row.team_name, row.started_at, time, times.reduce((sum, room) => sum + Math.max(0, room.stopped_at-room.started_at), 0), row.team_id, Number(Boolean(previous && !options.replaceResult)));
       const insert = this.db.prepare('INSERT INTO room_results(id,result_id,room_id,room_name,started_at,stopped_at,elapsed_ms) VALUES(?,?,?,?,?,?,?)');
       for (const room of times) insert.run(randomUUID(), resultId, room.room_id, room.room_name, room.started_at, room.stopped_at, Math.max(0, room.stopped_at-room.started_at));
       this.#lifecycle('team.ended', row, time, 'finished');
@@ -214,7 +256,8 @@ export class ReceptionStore {
       stoppedAt: room.stopped_at === null ? null : new Date(room.stopped_at).toISOString(),
       elapsedMs: Math.max(0, (room.stopped_at ?? row.ended_at ?? time)-room.started_at)
     }));
-    return { id: row.id, teamName: row.team_name, roomTimes,
+    return { id: row.id, teamId: row.team_id, teamName: row.team_name, roomTimes,
+      previousResult: this.#teamResult(row.team_id, 'finished_at DESC,rowid DESC', true, row.id),
       createdAt: new Date(row.created_at).toISOString(), startedAt: row.pending ? null : new Date(row.started_at).toISOString(),
       endsAt: null,
       finishedAt: row.ended_at === null ? null : new Date(row.ended_at).toISOString(),
