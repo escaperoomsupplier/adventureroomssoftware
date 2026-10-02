@@ -114,6 +114,7 @@ export class PortableConfig {
     const mediaIds = new Set(bundle.media.items.map(item => item.id));
     for (const kind of ['readers', 'screens', 'rules']) for (const item of bundle[kind].items) {
       if (item.roomId != null && !roomIds.has(item.roomId)) invalid(`Unknown room in ${kind}.json.`);
+      if (item.rankingRoomId != null && !roomIds.has(item.rankingRoomId)) invalid(`Unknown ranking room in ${kind}.json.`);
       if (item.screenId != null && !screenIds.has(item.screenId)) invalid(`Unknown screen in ${kind}.json.`);
       if (item.mediaId != null && !mediaIds.has(item.mediaId)) invalid(`Unknown media in ${kind}.json.`);
     }

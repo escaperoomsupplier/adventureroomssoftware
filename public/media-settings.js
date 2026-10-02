@@ -48,7 +48,8 @@ const screenForm = node('form', undefined, 'ms-form'); screenRoot.append(screenF
 const screenName = field(screenForm, 'Screen name'); screenName.required = true; screenName.maxLength = 80;
 const screenType = field(screenForm, 'Screen type', 'select'); staticOptions(screenType, [['room','Room Screen'],['leaderboard-room','Leaderboard Room Screen'],['leaderboard-global','Leaderboard Global Screen']]);
 const resultLimit = field(screenForm, 'Number of results', 'number'); resultLimit.min=1; resultLimit.max=100; resultLimit.value=10; resultLimit.required=true;
-const screenRoom = field(screenForm, 'Screen room', 'select');
+const screenRoom = field(screenForm, 'Screen location', 'select');
+const rankingRoom = field(screenForm, 'Ranking room', 'select');
 const backgroundType = field(screenForm, 'Background', 'select'); staticOptions(backgroundType, [['color','Solid color'],['image','Image'],['video','Video']]);
 const backgroundColor = field(screenForm, 'Background color', 'color'); backgroundColor.value = '#101827';
 const backgroundMedia = field(screenForm, 'Background media', 'select');
@@ -62,20 +63,20 @@ const screenList = node('div', undefined, 'table-wrap ms-list'); screenRoot.appe
 function editScreen(screen) {
   screenId = screen?.id ?? null; screenHeading.textContent = screen ? `Edit ${screen.name}` : 'Add screen'; screenSave.textContent = screen ? 'Save screen' : 'Add screen';
   screenType.value=screen?.type ?? 'room';resultLimit.value=screen?.resultLimit ?? 10;updateScreenFields();
-  screenName.value = screen?.name ?? ''; screenRoom.value = screen?.roomId ?? '';
+  screenName.value = screen?.name ?? ''; screenRoom.value = screen?.roomId ?? ''; rankingRoom.value = screen?.rankingRoomId ?? screen?.roomId ?? '';
   backgroundType.value = screen?.defaults.background.type ?? 'color'; backgroundColor.value = screen?.defaults.background.color ?? '#101827';
   refreshMediaOptions(); backgroundMedia.value = screen?.defaults.background.mediaId ?? '';
   showTimers.checked = screen?.defaults.showTimers ?? true; musicMedia.value = screen?.defaults.music.mediaId ?? ''; musicVolume.value = Math.round((screen?.defaults.music.volume ?? 0.5) * 100);
 }
 screenForm.addEventListener('submit', async event => {
   event.preventDefault();
-  const body = { type:screenType.value,resultLimit:Number(resultLimit.value),name: screenName.value.trim(), roomId: screenRoom.value || null, defaults: {
+  const body = { type:screenType.value,resultLimit:Number(resultLimit.value),name: screenName.value.trim(), roomId: screenRoom.value || null, rankingRoomId: screenType.value==='leaderboard-room' ? rankingRoom.value : null, defaults: {
     background: { type: backgroundType.value, color: backgroundColor.value, mediaId: backgroundType.value === 'color' ? null : backgroundMedia.value || null },
     showTimers: showTimers.checked, music: { mediaId: musicMedia.value || null, volume: Number(musicVolume.value) / 100 } } };
   const result = await mutate(() => request(`/api/screens${screenId ? `/${screenId}` : ''}`, screenId ? 'PATCH' : 'POST', body), 'Screen saved.');
   if (result?.screen) editScreen(result.screen);
 });
-function updateScreenFields(){screenRoom.required=screenType.value==='leaderboard-room';resultLimit.closest('label').hidden=screenType.value==='room';showTimers.closest('label').hidden=screenType.value!=='room';}
+function updateScreenFields(){screenRoom.required=false;rankingRoom.required=screenType.value==='leaderboard-room';rankingRoom.closest('label').hidden=screenType.value!=='leaderboard-room';resultLimit.closest('label').hidden=screenType.value==='room';showTimers.closest('label').hidden=screenType.value!=='room';}
 screenType.addEventListener('change',updateScreenFields);updateScreenFields();
 backgroundType.addEventListener('change', refreshMediaOptions);
 
@@ -224,12 +225,12 @@ export function updateMediaSettings(next) {
   state = { ...state, ...next }; controls();
   const key = JSON.stringify([state.screens, state.rooms, state.rules, state.media, state.readers.map(reader=>[reader.id,reader.name,reader.configured,reader.role])]); if (signature === key) return; signature = key;
   options(ruleReader,state.readers.filter(reader=>reader.configured && reader.role==='other').map(reader=>[reader.id,reader.name]),'Select Other reader');
-  const roomItems = state.rooms.map(r => [r.id, r.name]); options(screenRoom, roomItems, 'Unassigned'); options(ruleRoom, roomItems, 'Select room');
+  const roomItems = state.rooms.map(r => [r.id, r.name]); options(screenRoom, roomItems, 'Unassigned'); options(rankingRoom, roomItems, 'Select ranking room'); options(ruleRoom, roomItems, 'Select room');
   options(ruleScreen, state.screens.map(s => [s.id, s.name]), 'Select screen'); refreshMediaOptions();
   const roomName = id => state.rooms.find(r => r.id === id)?.name ?? 'Unassigned';
-  table(screenList, ['Screen','Type','Room','Background',''], state.screens.map(screen => {
+  table(screenList, ['Screen','Type','Location','Ranking room','Background',''], state.screens.map(screen => {
     const actions = node('div', undefined, 'ms-actions'); const open = node('a', 'Open player', 'text-link'); open.href = `/screens/${screen.id}`; open.target = '_blank'; open.rel = 'noopener';
-    actions.append(button('Edit', () => editScreen(screen)), open, removeButton(`/api/screens/${screen.id}`, 'Screen')); return [screen.name, ({room:'Room Screen','leaderboard-room':'Leaderboard Room Screen','leaderboard-global':'Leaderboard Global Screen'})[screen.type || 'room'], roomName(screen.roomId), screen.defaults.background.type, actions];
+    actions.append(button('Edit', () => editScreen(screen)), open, removeButton(`/api/screens/${screen.id}`, 'Screen')); return [screen.name, ({room:'Room Screen','leaderboard-room':'Leaderboard Room Screen','leaderboard-global':'Leaderboard Global Screen'})[screen.type || 'room'], roomName(screen.roomId), screen.type==='leaderboard-room'?roomName(screen.rankingRoomId ?? screen.roomId):'—', screen.defaults.background.type, actions];
   }), 'No screens yet. Add one here or on the map.');
   renderMedia();
   table(ruleList, ['Automation','When','Screen',''], state.rules.map(rule => {

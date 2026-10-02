@@ -231,3 +231,19 @@ test('screen presence follows live browsers, expires after missing heartbeats an
   assert.equal((await write(f, `/api/screens/${screen.id}/presence`, { clientId: 'unknown' })).status, 409);
   assert.equal((await readFile(join(f.options.configDirectory, 'screens.json'), 'utf8')).includes('online'), false);
 });
+
+test('Stop removes the live room clock and a hallway screen publishes the selected room ranking', async t => {
+  const f=await fixture(t), {room,screen}=await configured(f);
+  const {room:hall}=await(await write(f,'/api/rooms',{name:'Hall'})).json();
+  const {screen:ranking}=await(await write(f,'/api/screens',{name:'Library leaderboard',type:'leaderboard-room',roomId:hall.id,rankingRoomId:room.id})).json();
+  await firmware(f,'00000000_0');await write(f,`/api/readers/${deviceId}`,{configured:true,roomId:room.id,role:'start'},'PATCH');
+  const {session}=await(await write(f,'/api/reception/sessions',{name:'Explorers'})).json();await write(f,`/api/reception/sessions/${session.id}/cards`,{uid:'AABBCCDD'});
+  await firmware(f,'AABBCCDD_1');
+  const clock=await screenLive(t,f,screen.id);assert.equal((await clock.next()).teams[0].id,session.id);clock.close();
+  await write(f,`/api/readers/${deviceId}`,{role:'stop'},'PATCH');await firmware(f,'AABBCCDD_0');await firmware(f,'AABBCCDD_1');
+  const stopped=await screenLive(t,f,screen.id);assert.deepEqual((await stopped.next()).teams,[]);stopped.close();
+  assert.equal((await write(f,`/api/reception/sessions/${session.id}/end`)).status,200);
+  const live=await screenLive(t,f,ranking.id),state=await live.next();assert.equal(state.screen.roomId,hall.id);assert.equal(state.screen.rankingRoomId,room.id);assert.equal(state.leaderboard[0].sessionId,session.id);live.close();
+  const standalone=await(await write(f,'/api/screens',{name:'Standalone ranking',type:'leaderboard-room',roomId:null,rankingRoomId:room.id})).json();assert.ok(standalone.screen);
+  await f.restart();assert.equal(f.app.screens.getScreen(ranking.id).rankingRoomId,room.id);
+});
