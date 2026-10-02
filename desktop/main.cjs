@@ -108,6 +108,11 @@ async function start() {
   window = new BrowserWindow({ width: 1440, height: 950, minWidth: 800, minHeight: 600, show: false,
     title: 'Adventure Rooms', icon: join(__dirname, 'icon.png'),
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } });
+  const rendererErrors = [];
+  if (smoke) window.webContents.on('console-message', (_event, details, message) => {
+    if (details?.level === 'error' || details?.level === 3 || details === 3)
+      rendererErrors.push(details?.message || message || 'Renderer console error');
+  });
   window.webContents.on('will-navigate', (event, url) => { if (!helper.allowedLocalUrl(url, origin)) event.preventDefault(); });
   window.webContents.on('will-redirect', (event, url) => { if (!helper.allowedLocalUrl(url, origin)) event.preventDefault(); });
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -121,7 +126,16 @@ async function start() {
   if (smoke) {
     const title = window.webContents.getTitle();
     if (!/Adventure Rooms/.test(title)) throw new Error('The application page did not load its expected title.');
-    await report({ loaded: true, title }); app.quit();
+    const deadline = Date.now() + 15000;
+    let connected = false;
+    while (Date.now() < deadline && !connected) {
+      if (rendererErrors.length) throw new Error(`Renderer startup failed: ${rendererErrors.join('; ')}`);
+      connected = await window.webContents.executeJavaScript(`document.getElementById('connection')?.textContent.trim() === '● Connected'`);
+      if (!connected) await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (!connected) throw new Error('The application page did not establish its live connection.');
+    if (rendererErrors.length) throw new Error(`Renderer startup failed: ${rendererErrors.join('; ')}`);
+    await report({ loaded: true, connected: true, title }); app.quit();
   } else window.show();
 }
 

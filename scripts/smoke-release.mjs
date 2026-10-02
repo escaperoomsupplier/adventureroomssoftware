@@ -133,7 +133,7 @@ async function smokeDesktop(directory) {
   try {
     await finish(child, 30000);
     const report = JSON.parse(await readFile(reportPath, 'utf8'));
-    assert.equal(report.loaded, true); assert.equal(report.version, version);
+    assert.equal(report.loaded, true); assert.equal(report.connected, true); assert.equal(report.version, version);
     assert.equal(report.url, `http://127.0.0.1:${port}`);
     assert.equal(resolve(report.configDirectory), resolve(config));
     await assertPortClosed(port);
