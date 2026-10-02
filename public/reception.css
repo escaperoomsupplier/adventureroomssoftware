@@ -39,3 +39,4 @@
 .rc-history-details button { margin-top:0; }
 #rc-history-content { overflow:auto; margin-top:16px; }
 @media(max-width:800px) { .rc-layout { grid-template-columns:1fr; } .rc-section-heading { align-items:flex-start; flex-direction:column; } #rc-teams { grid-template-columns:1fr; } }
+.rc-room-times{display:grid;gap:8px;margin-bottom:16px}.rc-room-time{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid #edf1f4;padding-bottom:8px;font-size:12px}.rc-room-time span{font-variant-numeric:tabular-nums}.rc-room-time strong{overflow-wrap:anywhere}

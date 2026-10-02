@@ -54,7 +54,7 @@ function diagnostics() {
       const remove=node('button',deletingReader===reader.id?'Deleting…':'Delete','secondary reader-delete');remove.type='button';remove.dataset.reader=`${reader.id}:delete`;
       remove.disabled=!state.connected || deletingReader!==null;remove.setAttribute('aria-label',`Delete ${reader.name || reader.id}`);remove.addEventListener('click',()=>confirmReaderDelete(reader));
       actions.append(button,remove);
-      return [reader.name || 'Unconfigured reader',readerContact(reader),state.rooms.find(room=>room.id===reader.roomId)?.name || '—',({entry:'Entry Room',start:'Start time',finish:'Stop time',exit:'Exit Room'})[reader.role] || 'Unassigned',actions];
+      return [reader.name || 'Unconfigured reader',readerContact(reader),state.rooms.find(room=>room.id===reader.roomId)?.name || '—',({start:'Start time',stop:'Stop time',pairing:'Card assignment'})[reader.role] || 'Unassigned',actions];
     }),'No readers discovered yet.');
     if(focus)[...$('reader-table').querySelectorAll('button')].find(button=>button.dataset.reader===focus)?.focus();
   }

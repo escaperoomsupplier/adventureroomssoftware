@@ -68,9 +68,9 @@ export class RoomStore {
           if (JSON.parse(row.json).roomId === id) fail(409, 'Unassign screens and remove automation rules for this room before deleting it.');
         }
       }
-      if (exists('reception_sessions') && this.db.prepare(`SELECT id FROM reception_sessions
-        WHERE current_room_id=? AND pending=0 AND ended_at IS NULL AND terminal_status IS NULL AND ends_at>? LIMIT 1`).get(id, Date.now())) {
-        fail(409, 'An active team is assigned to this room. Record its exit or finish its session before deleting the room.');
+      if (exists('room_times') && this.db.prepare(`SELECT t.session_id FROM room_times t JOIN reception_sessions s ON s.id=t.session_id
+        WHERE t.room_id=? AND t.stopped_at IS NULL AND s.terminal_status IS NULL LIMIT 1`).get(id)) {
+        fail(409, 'A team has a running timer in this room. Stop or reset it before deleting the room.');
       }
       this.db.prepare('DELETE FROM rooms WHERE id=?').run(id);
       return { id, status: 'removed' };

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { ReceptionStore } from './reception.js';
 
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
@@ -29,6 +28,7 @@ export class VenueStore {
           INSERT INTO venue_migrations(name) VALUES('legacy_rooms');`);
       }
     });
+    db.exec("UPDATE reader_settings SET role=CASE role WHEN 'entry' THEN 'start' WHEN 'finish' THEN 'stop' WHEN 'exit' THEN 'stop' ELSE role END");
   }
 
   listReaders() {
@@ -40,7 +40,7 @@ export class VenueStore {
       lastRfid: JSON.parse(row.last_rfid ?? 'null'), snapshotCount: row.snapshot_count,
       rfidBaselineEstablished: row.observed !== null && row.last_rfid !== null && this.now() - Date.parse(row.last_seen_at) <= 25000,
       name: row.name ?? row.id, configured: Boolean(row.configured),
-      roomId: row.room_id ?? null, x: row.x ?? 20, y: row.y ?? 20, role: row.role ?? 'entry' }));
+      roomId: row.room_id ?? null, x: row.x ?? 20, y: row.y ?? 20, role: row.role ?? 'start' }));
   }
 
   deleteReader(id) {
@@ -63,7 +63,8 @@ export class VenueStore {
       const values = { ...reader, ...input };
       if (typeof values.name !== 'string' || !values.name.trim() || values.name.trim().length > 80) fail(400, 'Reader name must contain 1 to 80 characters.');
       if (typeof values.configured !== 'boolean') fail(400, 'Configured must be a boolean.');
-      if (!['entry', 'start', 'finish', 'exit'].includes(values.role)) fail(400, 'Invalid reader role.');
+      values.role = ({ entry: 'start', finish: 'stop', exit: 'stop' })[values.role] ?? values.role;
+      if (!['start', 'stop', 'pairing'].includes(values.role)) fail(400, 'Invalid reader role.');
       for (const key of ['x', 'y']) if (!Number.isInteger(values[key]) || values[key] < 0 || values[key] > 10000) fail(400, `Invalid reader ${key}.`);
       let room = null;
       if (values.roomId !== null) {
@@ -95,37 +96,10 @@ export class VenueStore {
       if (reader.room_id && !room) return changed;
       const binding = this.db.prepare('SELECT session_id FROM reception_bindings WHERE uid=? AND released_at IS NULL').get(event.uid);
       if (!binding) return changed;
-      let session = this.reception.getSession(binding.session_id);
-      if (reader.role === 'start' && session.status === 'pending') {
-        session = this.reception.startSession(session.id);
-        changed = true;
-      }
-      if (session.status !== 'active') return changed;
-      if (reader.role === 'exit') {
-        if (room && session.currentRoomId === room.id) {
-          this.#exitVisit(session.id, room.id, 'reader_exit');
-          this.db.prepare('UPDATE reception_sessions SET current_room_id=NULL,current_room_name=NULL WHERE id=?').run(session.id);
-        }
-        if (room) { this.#event('room.exited', session.id, room.id, 'reader'); return true; }
-        return changed;
-      }
-      if (room && session.currentRoomId !== room.id) {
-        if (session.currentRoomId) this.#exitVisit(session.id, session.currentRoomId, 'next_room');
-        this.db.prepare(`INSERT INTO team_visits(id,session_id,room_id,room_name,reader_id,reader_name,entered_at)
-          VALUES(?,?,?,?,?,?,?)`).run(randomUUID(), session.id, room.id, room.name, device.id, reader.name, this.now());
-        this.db.prepare('UPDATE reception_sessions SET current_room_id=?,current_room_name=? WHERE id=?').run(room.id, room.name, session.id);
-        changed = true;
-      }
-      // Automation follows each fresh reader placement; visit history follows
-      // room transitions, so multiple entry readers do not duplicate a visit.
-      if (reader.role === 'entry' && room) {
-        this.#event('room.entered', session.id, room.id, 'reader');
-        changed = true;
-      }
-      if (reader.role === 'finish') {
-        this.reception.endSession(session.id);
-        changed = true;
-      }
+      if (!room || reader.role === 'pairing') return changed;
+      const session = this.reception.getSession(binding.session_id);
+      if (reader.role === 'start') return this.reception.startRoom(session.id, room, { id: device.id, name: reader.name }) || changed;
+      if (reader.role === 'stop') return this.reception.stopRoom(session.id, room) || changed;
       return changed;
     });
   }
@@ -157,21 +131,16 @@ export class VenueStore {
       .map(row => ({ ...row, roomId: row.roomId || null, occurredAt: new Date(row.occurredAt).toISOString() }));
   }
 
-  #exitVisit(sessionId, roomId, reason) {
-    this.db.prepare('UPDATE team_visits SET exited_at=?,exit_reason=? WHERE session_id=? AND room_id=? AND exited_at IS NULL')
-      .run(this.now(), reason, sessionId, roomId);
+  listLeaderboard(roomId = null) {
+    const rows = roomId === null
+      ? this.db.prepare(`SELECT id,session_id AS sessionId,team_name AS teamName,started_at AS startedAt,
+        finished_at AS finishedAt,elapsed_ms AS elapsedMs FROM game_results WHERE hidden=0 AND timing_version=1 ORDER BY elapsed_ms,finished_at,rowid`).all()
+      : this.db.prepare(`SELECT g.id,g.session_id AS sessionId,g.team_name AS teamName,r.room_id AS roomId,r.room_name AS roomName,
+        r.started_at AS startedAt,r.stopped_at AS finishedAt,r.elapsed_ms AS elapsedMs FROM room_results r JOIN game_results g ON g.id=r.result_id
+        WHERE g.hidden=0 AND g.timing_version=1 AND r.room_id=? ORDER BY r.elapsed_ms,g.finished_at,r.rowid`).all(roomId);
+    return rows.map(row => ({ ...row, startedAt: new Date(row.startedAt).toISOString(), finishedAt: new Date(row.finishedAt).toISOString() }));
   }
 
-  #event(type, sessionId, roomId, source) {
-    this.db.prepare('INSERT INTO venue_events(id,type,session_id,room_id,occurred_at,source) VALUES(?,?,?,?,?,?)')
-      .run(randomUUID(), type, sessionId, roomId, this.now(), source);
-  }
-
-  listLeaderboard() {
-    return this.db.prepare(`SELECT id,session_id AS sessionId,team_name AS teamName,started_at AS startedAt,
-      finished_at AS finishedAt,elapsed_ms AS elapsedMs FROM game_results WHERE hidden=0 ORDER BY elapsed_ms,finished_at,rowid`).all()
-      .map(row => ({ ...row, startedAt: new Date(row.startedAt).toISOString(), finishedAt: new Date(row.finishedAt).toISOString() }));
-  }
 
   deleteLeaderboard(id) {
     if (typeof id !== 'string' || !id.length || id.length > 128) fail(400, 'Invalid result ID.');

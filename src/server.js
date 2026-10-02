@@ -86,6 +86,7 @@ export async function startServer({
   } catch (error) { store.close(); throw error; }
   const changeConfiguration = action => config ? config.change(action, { validateExtras: validateConfiguration }) : action();
   const captures = new CaptureStore();
+  let pairing = null;
   let discoveryHandle;
   let discoveryError = null;
   const subscribers = new Set();
@@ -97,7 +98,16 @@ export async function startServer({
   }));
   const health = () => ({ status: 'ok', local: true, transport: 'http-ercc',
     discovery: discovery ? (discoveryError ? 'degraded' : 'active') : 'disabled', discoveryError });
-  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: venue.listReaders(), readers: venue.listReaders(), events: store.listEvents(15), sessions: reception.listSessions(), rooms: rooms.listRooms(), leaderboard: venue.listLeaderboard(), screens: screensWithPresence(), rules: screens.listRules(), media: screens.listMedia() })}\n\n`;
+  const roomLeaderboards = () => Object.fromEntries(rooms.listRooms().map(room => [room.id, venue.listLeaderboard(room.id)]));
+  const pairingState = () => {
+    if (pairing) {
+      const reader = venue.listReaders().find(item => item.id === pairing.readerId);
+      const team = reception.listSessions().find(item => item.id === pairing.sessionId);
+      if (!reader?.configured || reader.role !== 'pairing' || !['pending','active'].includes(team?.status)) pairing = null;
+    }
+    return pairing;
+  };
+  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: venue.listReaders(), readers: venue.listReaders(), events: store.listEvents(15), sessions: reception.listSessions(), rooms: rooms.listRooms(), leaderboard: venue.listLeaderboard(), roomLeaderboards: roomLeaderboards(), pairing: pairingState(), screens: screensWithPresence(), rules: screens.listRules(), media: screens.listMedia() })}\n\n`;
   const sendFrame = (res, frame) => {
     // Disconnect slow readers instead of allowing an unbounded outgoing queue.
     if (res.destroyed || res.writableLength > 256 * 1024) {
@@ -108,7 +118,7 @@ export async function startServer({
     res.write(frame);
   };
   const screenFrame = id => {
-    try { return `data: ${JSON.stringify(screens.screenState(id, reception.listSessions()))}\n\n`; }
+    try { return `data: ${JSON.stringify(screens.screenState(id, reception.listSessions(), { global: venue.listLeaderboard(), rooms: roomLeaderboards() }))}\n\n`; }
     catch (error) { return `data: ${JSON.stringify({ screen: null, error: error.message })}\n\n`; }
   };
   const publishOperators = () => { if (!closed && subscribers.size) { const frame = stateFrame(); for (const res of subscribers) sendFrame(res, frame); } };
@@ -223,7 +233,7 @@ export async function startServer({
         json(res, status, result); publish(); return;
       }
       if (pathname === '/api/readers' && req.method === 'GET') return json(res, 200, venue.listReaders());
-      if (pathname === '/api/leaderboard' && req.method === 'GET') return json(res, 200, venue.listLeaderboard());
+      if (pathname === '/api/leaderboard' && req.method === 'GET') return json(res, 200, venue.listLeaderboard(new URL(req.url, 'http://localhost').searchParams.get('roomId') || null));
       const historyRoute = /^\/api\/reception\/sessions\/([A-Za-z0-9_-]{1,128})\/history$/.exec(pathname);
       if (historyRoute && req.method === 'GET') return json(res, 200, { visits: venue.getHistory(historyRoute[1]) });
       const captureRoute = /^\/api\/captures\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
@@ -287,6 +297,21 @@ export async function startServer({
         publish();
         return;
       }
+      if (pathname === '/api/pairing') {
+        if (req.method === 'GET') return json(res, 200, { pairing: pairingState() });
+        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, {error:'Cross-origin changes are not allowed'});
+        if (req.method === 'DELETE') { pairing = null; publishOperators(); return json(res, 200, {pairing}); }
+        if (req.method === 'POST') {
+          if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) return json(res, 415, {error:'Expected application/json'});
+          const body = await readJson(req);
+          const reader = venue.listReaders().find(item => item.id === body?.readerId);
+          if (!reader?.configured || reader.role !== 'pairing' || !reader.rfidBaselineEstablished) return json(res, 409, {error:'Choose an online Card assignment reader with a recent RFID baseline.'});
+          const team = reception.getSession(body.sessionId);
+          if (!['pending','active'].includes(team.status)) return json(res, 409, {error:'Choose a current team.'});
+          pairing = {readerId:reader.id,sessionId:team.id,lastUid:null,error:null};
+          publishOperators(); return json(res, 200, {pairing});
+        }
+      }
       if (pathname === '/api/reception/sessions' && req.method === 'GET') {
         return json(res, 200, reception.listSessions());
       }
@@ -309,7 +334,7 @@ export async function startServer({
         try {
         let session;
         let status = 200;
-        const route = /^\/api\/reception\/sessions\/([A-Za-z0-9_-]{1,128})\/(cards|start|end)(?:\/([A-Za-z0-9]{1,32}))?$/.exec(pathname);
+        const route = /^\/api\/reception\/sessions\/([A-Za-z0-9_-]{1,128})\/(cards|start|end|reset|cancel)(?:\/([A-Za-z0-9]{1,32}))?$/.exec(pathname);
         if (pathname === '/api/reception/sessions' && req.method === 'POST') {
           session = reception.createSession(body);
           status = 201;
@@ -319,6 +344,10 @@ export async function startServer({
           session = reception.releaseCard(route[1], route[3]);
         } else if (route && route[2] === 'start' && !route[3] && req.method === 'POST') {
           session = reception.startSession(route[1]);
+        } else if (route && route[2] === 'reset' && !route[3] && req.method === 'POST') {
+          session = reception.resetSession(route[1]);
+        } else if (route && route[2] === 'cancel' && !route[3] && req.method === 'POST') {
+          session = reception.cancelSession(route[1]);
         } else if (route && route[2] === 'end' && !route[3] && req.method === 'POST') {
           session = reception.endSession(route[1]);
         } else throw Object.assign(new Error('Not found'), { status: 404 });
@@ -350,12 +379,19 @@ export async function startServer({
         const readersBeforeSnapshot = venue.listReaders();
         captures.sweep(readersBeforeSnapshot);
         const captureBaselineReady = readersBeforeSnapshot.find(reader => reader.id === snapshot.id)?.rfidBaselineEstablished === true;
-        let capture = null;
+        let capture = null, pairingUpdate = null;
+        const currentPairing = pairingState();
         const recorded = store.recordSnapshot(snapshot, req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? 'unknown', data => {
-          capture = captureBaselineReady ? captures.match(data) : null;
-          venue.applySnapshot(capture ? { ...data, event: null } : data);
+          const pairingRead = currentPairing?.readerId === data.device.id && captureBaselineReady && data.event?.type === 'rfid.placed' && data.event.placed;
+          if (pairingRead) {
+            try { reception.assignCard(currentPairing.sessionId, data.event.uid); pairingUpdate = {...currentPairing,lastUid:data.event.uid,error:null}; }
+            catch (error) { if (error.status !== 409) throw error; pairingUpdate = {...currentPairing,lastUid:data.event.uid,error:error.message}; }
+          }
+          capture = !pairingRead && captureBaselineReady ? captures.match(data) : null;
+          venue.applySnapshot(capture || pairingRead ? { ...data, event: null } : data);
           screens.syncEvents(venue.listDomainEvents(screens.getEventCursor()));
         });
+        if (pairingUpdate) pairing = pairingUpdate;
         if (capture) captures.complete(capture, recorded.event.uid);
         // ACK only after SQLite commit. UUPC checks for literal "200 OK".
         json(res, 200, { status: 'ok' });

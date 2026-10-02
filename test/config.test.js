@@ -104,7 +104,7 @@ test('import retains session history and geometry normalization does not move ol
   const room = rooms.createRoom({ name: 'Old', x: 0, y: 0 });
   store.db.prepare('UPDATE rooms SET enabled=0 WHERE id=?').run(room.id);
   const session = reception.createSession({ name: 'Existing', durationMinutes: 60 });
-  reception.assignCard(session.id, 'AABBCCDD'); reception.startSession(session.id);
+  reception.assignCard(session.id, 'AABBCCDD'); reception.startRoom(session.id,room);
   config.initialize();
   assert.equal(rooms.getRoom(room.id).enabled, true);
   assert.equal(rooms.getRoom(room.id).x, 0);

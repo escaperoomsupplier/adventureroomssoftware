@@ -1,14 +1,14 @@
 const root = document.getElementById('reception');
-root.innerHTML = `<div class="rc-layout"><form id="rc-team-form" class="rc-panel"><h2>Add a team</h2><p class="rc-hint">Prepare the team now. Start their time here or by tapping an assigned wristband on a configured start reader.</p><label for="rc-name">Team name</label><input id="rc-name" required maxlength="80" autocomplete="off"><div class="rc-duration"><div><label for="rc-hours">Hours</label><input id="rc-hours" type="number" min="0" max="12" value="1" required></div><div><label for="rc-minutes">Minutes</label><input id="rc-minutes" type="number" min="0" max="59" value="0" required></div></div><p class="rc-hint">Total duration: 1 minute to 12 hours.</p><button type="submit">Add team</button></form><form id="rc-card-form" class="rc-panel"><h2>Assign wristbands</h2><label for="rc-target">Team</label><select id="rc-target" required><option value="">Select a team</option></select><label for="rc-reader">Reader</label><select id="rc-reader"><option value="">Select a configured reader</option></select><div class="rc-actions"><button id="rc-read" type="button">Read card</button><button id="rc-cancel-read" type="button" class="secondary" hidden>Cancel reading</button></div><p id="rc-capture-status" class="rc-hint" role="status">Press Read card, then tap a wristband. Remove any card already on the reader and tap it again.</p><label for="rc-uid">Card UID</label><input id="rc-uid" required pattern="[0-9a-fA-F]{8}" minlength="8" maxlength="8" placeholder="12AB34CD" autocomplete="off" spellcheck="false"><p class="rc-hint">You can also enter the UID manually. Review it, then assign the card. Each team can have multiple wristbands.</p><button type="submit">Assign card</button></form></div><p id="rc-error" role="alert" hidden></p><p id="rc-message" role="status"></p><div class="rc-section-heading"><h2>Teams</h2><span id="rc-connection" class="rc-hint">Waiting for live data…</span></div><div id="rc-teams"></div>`;
+root.innerHTML = `<div class="rc-layout"><form id="rc-team-form" class="rc-panel"><h2>Add a team</h2><p class="rc-hint">Each room records its own time. Use its Start time and Stop time readers.</p><label for="rc-name">Team name</label><input id="rc-name" required maxlength="80" autocomplete="off"><button type="submit">Add team</button></form><form id="rc-card-form" class="rc-panel"><h2>Assign wristbands</h2><label for="rc-target">Team</label><select id="rc-target" required><option value="">Select a team</option></select><label for="rc-reader">Card assignment reader</label><select id="rc-reader" required><option value="">Select an online pairing reader</option></select><div class="rc-actions"><button id="rc-pair" type="submit">Start card assignment</button><button id="rc-stop-pair" type="button" class="secondary">Stop card assignment</button></div><p id="rc-pairing-status" class="rc-hint" role="status">Start assignment, then tap wristbands one by one. Each new card is added automatically.</p></form></div><p id="rc-error" role="alert" hidden></p><p id="rc-message" role="status"></p><div class="rc-section-heading"><h2>Teams</h2><span id="rc-connection" class="rc-hint">Waiting for live data…</span></div><div id="rc-teams"></div>`;
 const $ = (id) => document.getElementById(id);
 const teamHeading = root.querySelector('.rc-section-heading');
 teamHeading.insertAdjacentHTML('beforebegin', `<nav class="rc-team-tabs" aria-label="Team lists"><button id="rc-current-tab" type="button" aria-pressed="true">Current teams <span id="rc-current-count">0</span></button><button id="rc-history-tab" type="button" class="secondary" aria-pressed="false">History <span id="rc-history-count">0</span></button></nav>`);
-teamHeading.insertAdjacentHTML('afterend', `<div id="rc-history-filters" class="rc-history-filters" hidden><label>Search team name<input id="rc-history-search" type="search" placeholder="Search history" autocomplete="off"></label><label>Status<select id="rc-history-status"><option value="">All past teams</option><option value="finished">Finished</option><option value="expired">Expired</option><option value="cancelled">Cancelled</option></select></label></div>`);
+teamHeading.insertAdjacentHTML('afterend', `<div id="rc-history-filters" class="rc-history-filters" hidden><label>Search team name<input id="rc-history-search" type="search" placeholder="Search history" autocomplete="off"></label><label>Status<select id="rc-history-status"><option value="">All past teams</option><option value="finished">Finished</option><option value="cancelled">Cancelled</option></select></label></div>`);
 root.insertAdjacentHTML('beforeend', `<nav id="rc-history-pages" class="rc-history-pages" aria-label="Team history pages" hidden><button id="rc-history-previous" type="button" class="secondary">Previous</button><span id="rc-history-page" role="status"></span><button id="rc-history-next" type="button" class="secondary">Next</button></nav><section id="rc-history-details" class="rc-panel rc-history-details" aria-label="Team visit history" hidden><div class="rc-team-heading"><h2 id="rc-history-title"></h2><button id="rc-history-close" type="button" class="secondary">Close history</button></div><div id="rc-history-content" aria-live="polite"></div></section>`);
 let sessions = [], readers = [], connected = false, pending = false;
 let listMode = 'current', historyPage = 1, historyGeneration = 0, historySessionId = null;
 const historyPageSize = 15;
-let capture = null, captureGeneration = 0, captureTimer = null, captureArming = false;
+let pairing = null;
 let teamSignature = '';
 const node = (tag, text, className) => {
   const element = document.createElement(tag);
@@ -16,17 +16,23 @@ const node = (tag, text, className) => {
   if (className) element.className = className;
   return element;
 };
-const available = (session) => session.status === 'pending' || (session.status === 'active' && Date.parse(session.endsAt) > Date.now());
+const available = session => ['pending','active'].includes(session.status);
+const elapsed = room => room.stoppedAt ? Number(room.elapsedMs || 0) : Math.max(0, Date.now()-Date.parse(room.startedAt));
+const total = session => (session.roomTimes || []).reduce((sum, room) => sum+elapsed(room), 0);
 const formatDuration = (ms) => {
   const seconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
   return `${Math.floor(seconds / 3600)}h ${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}m ${String(seconds % 60).padStart(2, '0')}s`;
 };
 function controls() {
   for (const input of root.querySelectorAll('form input,form select,form button,[data-mutation]')) input.disabled = pending || !connected;
-  $('rc-read').disabled = pending || !connected || captureArming || !!capture || !$('rc-reader').value;
-  $('rc-cancel-read').hidden = !capture && !captureArming;
-  $('rc-cancel-read').disabled = false;
-  $('rc-card-form').querySelector('button[type="submit"]').disabled = pending || !connected || captureArming || !!capture || !sessions.some((s) => s.id === $('rc-target').value && available(s));
+  const pairingReader=readers.find(r=>r.id===$('rc-reader').value);
+  $('rc-pair').disabled = pending || !connected || !pairingReader || !pairingReader.rfidBaselineEstablished || Date.now()-Date.parse(pairingReader.lastSeenAt)>25000 || !sessions.some(s => s.id === $('rc-target').value && available(s));
+  $('rc-stop-pair').disabled = pending || !connected || !pairing;
+  $('rc-pairing-status').textContent = pairing ? `${sessions.find(s=>s.id===pairing.sessionId)?.teamName || 'Selected team'} · ${readers.find(r=>r.id===pairing.readerId)?.name || 'Card reader'}: ${pairing.error || (pairing.lastUid ? `Added ${pairing.lastUid}. Tap the next wristband.` : 'Waiting for wristbands…')}` : 'Start assignment, then tap wristbands one by one. Each new card is added automatically.';
+  for (const button of root.querySelectorAll('[data-save-team]')) {
+    const session = sessions.find(s=>s.id===button.dataset.saveTeam), times = session?.roomTimes || [];
+    button.disabled = pending || !connected || !times.some(t=>t.stoppedAt) || times.some(t=>!t.stoppedAt);
+  }
   $('rc-connection').textContent = connected ? 'Live updates connected' : 'Live updates unavailable. Changes are disabled.';
 }
 function options(id, items, placeholder) {
@@ -41,9 +47,9 @@ function timers() {
   for (const element of $('rc-teams').querySelectorAll('[data-session-id]')) {
     const session = sessions.find((s) => s.id === element.dataset.sessionId);
     if (!session) continue;
-    element.textContent = !connected ? 'Unavailable while disconnected' : session.status === 'pending' ? `${formatDuration(session.durationMinutes * 60000)} available · not started`
-      : session.status === 'active' ? `${formatDuration(Date.parse(session.endsAt) - Date.now())} remaining`
-      : `${formatDuration(session.elapsedMs)} elapsed`;
+    const room = element.dataset.roomId ? session.roomTimes?.find(t=>t.roomId===element.dataset.roomId) : null;
+    element.textContent = !connected && (room ? !room.stoppedAt : session.roomTimes?.some(t=>!t.stoppedAt)) ? 'Unavailable while disconnected'
+      : room ? `${formatDuration(elapsed(room))} · ${room.stoppedAt ? 'Stopped' : 'Running'}` : `${formatDuration(total(session))} total`;
   }
   controls();
 }
@@ -66,6 +72,13 @@ function render() {
       heading.append(node('h3', session.teamName), node('span', ({ pending:'Pending',active:'Active',finished:'Finished',ended:'Finished',expired:'Expired',cancelled:'Cancelled' })[session.status] || session.status, `rc-status rc-${session.status}`));
       const timer = node('p', undefined, 'rc-timer'); timer.dataset.sessionId = session.id;
       card.append(heading, timer);
+      const roomTimes = node('div', undefined, 'rc-room-times');
+      for (const room of session.roomTimes || []) {
+        const row = node('div', undefined, 'rc-room-time'); const clock = node('span'); clock.dataset.sessionId=session.id; clock.dataset.roomId=room.roomId;
+        row.append(node('strong',room.roomName),clock); roomTimes.append(row);
+      }
+      if (!session.roomTimes?.length) roomTimes.append(node('p','No room times recorded yet.','rc-hint'));
+      card.append(roomTimes);
       if (session.currentRoomName) card.append(node('p', `Current room: ${session.currentRoomName}`, 'rc-hint'));
       const cards = node('div', undefined, 'rc-cards');
       for (const uid of session.cards || []) {
@@ -76,8 +89,9 @@ function render() {
       if (!session.cards?.length) cards.append(node('p', 'No wristbands assigned.', 'rc-hint'));
       card.append(cards);
       const actions = node('div', undefined, 'rc-actions');
-      if (session.status === 'pending') actions.append(action('Start', `${session.id}:start`, () => mutate(`/api/reception/sessions/${encodeURIComponent(session.id)}/start`, 'POST', {}, 'Team session started.'), true));
-      if (['pending','active'].includes(session.status)) actions.append(action(session.status === 'pending' ? 'Cancel team' : 'Finish', `${session.id}:end`, () => mutate(`/api/reception/sessions/${encodeURIComponent(session.id)}/end`, 'POST', {}, session.status === 'pending' ? 'Team cancelled.' : 'Team session finished.')));
+      const save=action('Save', `${session.id}:save`, () => mutate(`/api/reception/sessions/${encodeURIComponent(session.id)}/end`, 'POST', {}, 'Team results saved.'), true);save.dataset.saveTeam=session.id;
+      actions.append(save,action('Reset time',`${session.id}:reset`,()=>mutate(`/api/reception/sessions/${encodeURIComponent(session.id)}/reset`,'POST',{},'All room times reset.')),
+        action('Cancel',`${session.id}:cancel`,()=>mutate(`/api/reception/sessions/${encodeURIComponent(session.id)}/cancel`,'POST',{},'Team cancelled.')));
       card.append(actions); $('rc-teams').append(card);
     }
     if (listMode === 'current' && !current.length) $('rc-teams').append(node('p', 'No current teams. Add a team above or browse History.', 'rc-empty'));
@@ -124,7 +138,16 @@ async function showHistory(session) {
   const generation = ++historyGeneration;
   historySessionId = session.id;
   $('rc-history-details').hidden = false;
-  $('rc-history-title').textContent = `${session.teamName} · visit history`;
+  $('rc-history-title').textContent = `${session.teamName} · room times`;
+  if (Array.isArray(session.roomTimes)) {
+    const content=$('rc-history-content');content.replaceChildren();
+    const table=node('table'),head=node('thead'),header=node('tr'),body=node('tbody');
+    for(const name of ['Room','Started','Stopped','Time'])header.append(node('th',name));
+    head.append(header);table.append(head,body);
+    for(const room of session.roomTimes){const row=node('tr');for(const value of [room.roomName,dateTime(room.startedAt),dateTime(room.stoppedAt),formatDuration(available(session)?elapsed(room):Number(room.elapsedMs || 0))])row.append(node('td',value));body.append(row);}
+    content.append(session.roomTimes.length?table:node('p','No room times recorded.','rc-hint'));
+    $('rc-history-close').focus({preventScroll:true});return;
+  }
   $('rc-history-content').replaceChildren(node('p', 'Loading visit history…', 'rc-hint'));
   $('rc-history-close').focus({ preventScroll: true });
   try {
@@ -148,7 +171,6 @@ async function showHistory(session) {
   }
 }
 function setListMode(mode) {
-  if (mode === 'history' && (capture || captureArming)) cancelCapture('Reading cancelled while browsing history.');
   listMode = mode; historyPage = 1; closeHistory();
   for (const [id, active] of [['rc-current-tab', mode === 'current'], ['rc-history-tab', mode === 'history']]) {
     $(id).setAttribute('aria-pressed', String(active)); $(id).classList.toggle('secondary', !active);
@@ -191,61 +213,31 @@ async function mutate(path, method, body, message) {
   } catch (error) { showError(error); return null; }
   finally { pending = false; controls(); }
 }
-async function cancelCapture(message = 'Reading cancelled.') {
-  captureGeneration++; clearTimeout(captureTimer);
-  const previous = capture; capture = null; captureArming = false;
-  $('rc-capture-status').textContent = message; controls();
-  if (previous) try { await request(`/api/captures/${encodeURIComponent(previous.id)}`, 'DELETE'); } catch (error) { showError(error); }
-}
-async function pollCapture(generation) {
-  if (generation !== captureGeneration || !capture) return;
-  try {
-    const { capture: next } = await request(`/api/captures/${encodeURIComponent(capture.id)}`);
-    if (generation !== captureGeneration) return;
-    capture = next;
-    if (next.status === 'waiting') { captureTimer = setTimeout(() => pollCapture(generation), 300); return; }
-    if (next.status === 'captured' && /^[0-9a-f]{8}$/i.test(next.uid || '')) {
-      $('rc-uid').value = next.uid.toUpperCase(); $('rc-capture-status').textContent = 'New card read. Review the UID and press Assign card.';
-    } else $('rc-capture-status').textContent = next.status === 'expired' ? 'Reading timed out. Press Read card to try again.' : 'Reading cancelled.';
-    capture = null; controls();
-  } catch (error) { if (generation === captureGeneration) { await cancelCapture('Reading interrupted. Please start a new reading.'); showError(error); } }
-}
-$('rc-read').addEventListener('click', async () => {
-  if (capture || captureArming || pending || !connected || !$('rc-reader').value) return;
-  const generation = ++captureGeneration; captureArming = true; controls(); $('rc-error').hidden = true;
-  $('rc-uid').value = '';
-  $('rc-capture-status').textContent = 'Preparing reader…';
-  try {
-    const { capture: created } = await request(`/api/readers/${encodeURIComponent($('rc-reader').value)}/capture`, 'POST', {});
-    if (generation !== captureGeneration) { await request(`/api/captures/${encodeURIComponent(created.id)}`, 'DELETE'); return; }
-    capture = created; captureArming = false; $('rc-capture-status').textContent = 'Waiting for a new card tap…'; controls();
-    pollCapture(generation);
-  } catch (error) { if (generation === captureGeneration) { captureArming = false; $('rc-capture-status').textContent = 'Could not confirm reader preparation. Any pending reading expires after 60 seconds.'; showError(error); controls(); } }
-});
-$('rc-cancel-read').addEventListener('click', () => cancelCapture());
-$('rc-reader').addEventListener('change', () => { if (capture || captureArming) cancelCapture(); else controls(); });
 $('rc-target').addEventListener('change', controls);
-window.addEventListener('pagechange', (event) => { if (event.detail?.page !== 'reception') { closeHistory(); if (capture || captureArming) cancelCapture(); } });
-$('rc-team-form').addEventListener('submit', async (event) => {
+$('rc-reader').addEventListener('change', controls);
+window.addEventListener('pagechange', event => { if (event.detail?.page !== 'reception') closeHistory(); });
+$('rc-team-form').addEventListener('submit', async event => {
   event.preventDefault(); const name = $('rc-name').value.trim();
-  const durationMinutes = Number($('rc-hours').value) * 60 + Number($('rc-minutes').value);
-  if (!name || !Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 720) { showError(new Error('Enter a team name and a duration between 1 and 720 minutes.')); return; }
-  const result = await mutate('/api/reception/sessions', 'POST', { name, durationMinutes }, 'Team added. Press Start or tap an assigned wristband on a start reader when ready.');
+  if (!name) { showError(new Error('Enter a team name.')); return; }
+  const result = await mutate('/api/reception/sessions', 'POST', { name }, 'Team added. Assign wristbands to begin.');
   if (result?.session) { $('rc-name').value = ''; $('rc-target').value = result.session.id; controls(); }
 });
-$('rc-card-form').addEventListener('submit', async (event) => {
-  event.preventDefault(); if (capture || captureArming || !$('rc-target').value) return;
-  const result = await mutate(`/api/reception/sessions/${encodeURIComponent($('rc-target').value)}/cards`, 'POST', { uid: $('rc-uid').value.trim().toUpperCase() }, 'Card assigned.');
-  if (result) $('rc-uid').value = '';
+$('rc-card-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!$('rc-target').value || !$('rc-reader').value) return;
+  const result = await mutate('/api/pairing', 'POST', { readerId: $('rc-reader').value, sessionId: $('rc-target').value }, 'Card assignment started.');
+  if (result) { pairing = result.pairing ?? null; controls(); }
+});
+$('rc-stop-pair').addEventListener('click', async () => {
+  const result = await mutate('/api/pairing', 'DELETE', undefined, 'Card assignment stopped.');
+  if (result) { pairing = null; controls(); }
 });
 export function updateReception(state = {}) {
   if (state.sessions) sessions = state.sessions;
   if (state.readers) readers = state.readers;
+  if ('pairing' in state) pairing = state.pairing;
   connected = state.connected ?? connected;
-  if (!connected && (capture || captureArming)) cancelCapture('Reading cancelled because live updates disconnected.');
-  const oldReader = $('rc-reader').value;
-  options('rc-reader', readers.filter((reader) => reader.configured === true).map((reader) => [reader.id, reader.name]), 'Select a configured reader');
-  if (oldReader && oldReader !== $('rc-reader').value && (capture || captureArming)) cancelCapture('Reader no longer available.');
+  options('rc-reader', readers.filter(reader => reader.configured && reader.role==='pairing' && Date.now()-Date.parse(reader.lastSeenAt)<=25000).map(reader => [reader.id, reader.name]), 'Select an online pairing reader');
   options('rc-target', sessions.filter(available).map((session) => [session.id, session.teamName]), 'Select a team');
   render();
 }

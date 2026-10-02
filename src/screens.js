@@ -27,7 +27,7 @@ export class ScreenStore {
   #media(id, kinds) { if(!identifier(id)) fail(400,'Invalid media reference.'); const media=this.#get('media',id); if(!kinds.includes(media.kind)) fail(400,'Media type does not match its use.'); }
   #volume(value) { if(typeof value !== 'number' || !Number.isFinite(value) || value<0 || value>1) fail(400,'Volume must be between 0 and 1.'); }
   #screen(input) {
-    if(!object(input) || !identifier(input.id)) fail(400,'Invalid screen.'); const value=structuredClone(input); value.name=name(value.name); this.#room(value.roomId,true);
+    if(!object(input) || !identifier(input.id)) fail(400,'Invalid screen.'); const value={type:'room',resultLimit:10,...structuredClone(input)}; if(!['room','leaderboard-room','leaderboard-global'].includes(value.type) || !Number.isInteger(value.resultLimit) || value.resultLimit<1 || value.resultLimit>100)fail(400,'Invalid screen type or result limit.');if(value.type==='leaderboard-room' && !value.roomId)fail(400,'Room leaderboard requires a room.'); value.name=name(value.name); this.#room(value.roomId,true);
     for(const key of ['x','y']) if(!Number.isInteger(value[key]) || value[key]<-10000 || value[key]>10000) fail(400,'Screen coordinates must be integers from -10000 to 10000.');
     if(value.roomId!==null) { const room=this.db.prepare('SELECT * FROM rooms WHERE id=?').get(value.roomId); value.x=Math.min(Math.max(0,value.x),room.width ?? 10000);value.y=Math.min(Math.max(0,value.y),room.height ?? 10000); }
     const defaults=value.defaults; if(!object(defaults) || !object(defaults.background) || !object(defaults.music) || typeof defaults.showTimers!=='boolean') fail(400,'Invalid screen defaults.');
@@ -35,7 +35,7 @@ export class ScreenStore {
     if(background.type==='color') { if(background.mediaId!==null) fail(400,'Color backgrounds cannot reference media.'); }
     else this.#media(background.mediaId,[background.type]);
     this.#volume(defaults.music.volume); if(defaults.music.mediaId!==null) this.#media(defaults.music.mediaId,['audio']);
-    return {id:value.id,name:value.name,roomId:value.roomId,x:value.x,y:value.y,defaults};
+    return {id:value.id,name:value.name,type:value.type,resultLimit:value.resultLimit,roomId:value.roomId,x:value.x,y:value.y,defaults};
   }
   #action(input) {
     if(!object(input) || !['image','video','audio'].includes(input.type)) fail(400,'Invalid action.');
@@ -120,5 +120,5 @@ export class ScreenStore {
     return Number(completed)+Number(retired)>0;
   }); }
   preview(screenId,action) { this.getScreen(screenId);const validated=this.#action(action);return this.#atomic(()=>{const id=this.#enqueue(screenId,validated,{mode:'replace'});this.reconcile();const state=this.screenState(screenId);return state.playback;}); }
-  screenState(id,sessions=[]) { const screen=this.getScreen(id);const current=this.db.prepare("SELECT * FROM screen_playback WHERE screen_id=? AND status='playing'").get(id); return {screen,playback:current?{id:current.id,action:JSON.parse(current.action_json),startsAt:new Date(current.starts_at).toISOString(),endsAt:current.ends_at===null?null:new Date(current.ends_at).toISOString()}:null,teams:sessions.filter(team=>team.status==='active' && team.currentRoomId===screen.roomId && screen.roomId!==null && Date.parse(team.endsAt)>this.now()),serverNow:new Date(this.now()).toISOString(),media:this.listMedia().map(({path,...media})=>({...media,url:`/media/${encodeURIComponent(media.id)}?v=${media.revision ?? 0}`}))}; }
+  screenState(id,sessions=[],leaderboards={global:[],rooms:{}}) { const screen=this.getScreen(id);const current=this.db.prepare("SELECT * FROM screen_playback WHERE screen_id=? AND status='playing'").get(id); return {screen,playback:current?{id:current.id,action:JSON.parse(current.action_json),startsAt:new Date(current.starts_at).toISOString(),endsAt:current.ends_at===null?null:new Date(current.ends_at).toISOString()}:null,teams:sessions.filter(team=>team.status==='active' && screen.roomId!==null && team.roomTimes?.some(room=>room.roomId===screen.roomId)),leaderboard:(screen.type==='leaderboard-global'?(leaderboards.global || []):screen.type==='leaderboard-room'?(leaderboards.rooms?.[screen.roomId] || []):[]).slice().sort((a,b)=>a.elapsedMs-b.elapsedMs).slice(0,screen.resultLimit ?? 10),serverNow:new Date(this.now()).toISOString(),media:this.listMedia().map(({path,...media})=>({...media,url:`/media/${encodeURIComponent(media.id)}?v=${media.revision ?? 0}`}))}; }
 }
