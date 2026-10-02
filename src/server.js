@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { isSea, getAsset } from 'node:sea';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, resolve, relative, isAbsolute } from 'node:path';
 import { realpathSync, statSync } from 'node:fs';
@@ -14,7 +15,7 @@ import { ScreenStore } from './screens.js';
 import { MediaFiles } from './media.js';
 import { PortableConfig, prepareConfigDirectory, readSettings } from './config.js';
 
-const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
+const publicDir = isSea() ? null : fileURLToPath(new URL('../public/', import.meta.url));
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ...['/reception', '/leaderboard', '/devices', '/screen-settings', '/media', '/automations'].map(path => [path, ['index.html', 'text/html; charset=utf-8']]),
@@ -429,7 +430,7 @@ export async function startServer({
       const playerPage = /^\/screens\/[A-Za-z0-9_-]{1,128}$/.test(pathname);
       if (req.method === 'GET' && (assets.has(pathname) || playerPage)) {
         const [file, type] = playerPage ? ['screen.html', 'text/html; charset=utf-8'] : assets.get(pathname);
-        const content = await readFile(resolve(publicDir, file));
+        const content = isSea() ? Buffer.from(getAsset(file)) : await readFile(resolve(publicDir, file));
         res.writeHead(200, { 'Content-Type': type, 'Content-Length': content.length,
           'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
           'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" });
@@ -484,7 +485,7 @@ export async function startServer({
   } };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+async function startFromCommandLine() {
   const configDirectory = resolve(process.env.CONFIG_DIR ?? 'config');
   const settings = readSettings(configDirectory);
   const port = Number(process.env.PORT ?? settings.port);
@@ -502,4 +503,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
     app.close().catch(error => { console.error(error.message); process.exitCode = 1; });
   });
+}
+
+if (!isSea() && process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  startFromCommandLine().catch(error => { console.error(error.message); process.exitCode = 1; });
 }

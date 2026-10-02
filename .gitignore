@@ -5,3 +5,6 @@ data-demo/
 *.log
 
 config/
+
+build/
+dist/
