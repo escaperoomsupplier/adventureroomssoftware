@@ -11,7 +11,7 @@ export class CaptureStore {
     }
     if ([...this.items.values()].some(c => c.readerId === reader.id && c.status === 'waiting')) fail(409, 'This reader is already waiting for a card.');
     if (this.items.size >= 256) fail(429, 'Too many recent card reads. Try again shortly.');
-    const capture = { id: randomUUID(), readerId: reader.id, status: 'waiting', uid: null, expiresAt: new Date(this.now() + 60000).toISOString() };
+    const capture = { id: randomUUID(), readerId: reader.id, deviceId: reader.deviceId ?? reader.id, port: reader.port ?? null, status: 'waiting', uid: null, expiresAt: new Date(this.now() + 60000).toISOString() };
     this.items.set(capture.id, capture);
     return { ...capture };
   }
@@ -27,10 +27,10 @@ export class CaptureStore {
     if (item.status === 'waiting') item.status = 'cancelled';
     return { ...item };
   }
-  match({ device, event, previous }) {
+  match({ device, event, previous, readerId }) {
     this.sweep();
     if (event?.type !== 'rfid.placed' || !previous?.lastRfid || this.now() - Date.parse(previous.lastSeenAt) > 25000) return null;
-    return [...this.items.values()].find(c => c.status === 'waiting' && c.readerId === device.id) ?? null;
+    return [...this.items.values()].find(c => c.status === 'waiting' && c.readerId === (readerId ?? device.id) && c.deviceId === device.id && c.port === (event.port ?? null)) ?? null;
   }
   // Called only after the device transaction commits.
   complete(capture, uid) { capture.status = 'captured'; capture.uid = uid; }
@@ -40,7 +40,7 @@ export class CaptureStore {
       if (capture.status === 'waiting' && expiry <= this.now()) capture.status = 'expired';
       if (readers && capture.status === 'waiting') {
         const reader = readers.find(r => r.id === capture.readerId);
-        if (!reader?.configured || !reader.rfidBaselineEstablished || this.now() - Date.parse(reader.lastSeenAt) > 25000) capture.status = 'cancelled';
+        if (!reader?.configured || (reader.deviceId ?? reader.id) !== capture.deviceId || (reader.port ?? null) !== capture.port || !reader.rfidBaselineEstablished || this.now() - Date.parse(reader.lastSeenAt) > 25000) capture.status = 'cancelled';
       }
       if (expiry + 60000 <= this.now()) this.items.delete(id);
     }

@@ -78,3 +78,45 @@ test('firmware empty sentinel establishes baseline without emitting a removal', 
     assert.equal(store.listEvents().length, 1);
   } finally { store.close(); }
 });
+
+test('same card on different ports emits distinct events and exact tuple repeats are suppressed', () => {
+  const store = new DeviceStore(':memory:');
+  try {
+    const packet = (port, placed = true) => ({ ...snapshot('AABBCCDD', placed), rfid: { uid: 'AABBCCDD', placed, port } });
+    assert.equal(store.recordSnapshot(packet(1), address).event, null);
+    assert.equal(store.recordSnapshot(packet(1), address).event, null);
+    assert.equal(store.recordSnapshot(packet(2), address).event.port, 2);
+    assert.equal(store.recordSnapshot(packet(2), address).event, null);
+    assert.equal(store.recordSnapshot(packet(1), address).event.port, 1);
+    assert.equal(store.recordSnapshot(packet(2, false), address).event.type, 'rfid.removed');
+    assert.deepEqual(store.listEvents().map(event => event.port), [2, 1, 2]);
+    assert.deepEqual(store.listDevices()[0].observedPorts, [1, 2]);
+    assert.equal(store.listDevices()[0].portCount, null);
+    const before = store.listDevices();
+    assert.throws(() => store.recordSnapshot(packet(3), address, () => { throw new Error('Abort'); }), /Abort/);
+    assert.deepEqual(store.listDevices(), before);
+    for (const port of [0, 256, -1, 1.5, '2']) assert.throws(() => store.recordSnapshot(packet(port), address), /RFID/);
+  } finally { store.close(); }
+});
+
+test('legacy database gains nullable event ports without replaying its last card; observed ports survive restart', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'adventure-multiport-'));
+  let store;
+  try {
+    const path = join(directory, 'state.sqlite');
+    store = new DeviceStore(path);
+    store.recordSnapshot(snapshot('AABBCCDD', false), address);
+    store.recordSnapshot(snapshot('AABBCCDD', true), address);
+    store.db.prepare('UPDATE devices SET last_rfid=?').run(JSON.stringify({ uid: 'AABBCCDD', placed: true }));
+    store.db.exec('DROP TABLE device_observed_ports; ALTER TABLE events DROP COLUMN port');
+    store.close(); store = new DeviceStore(path);
+    assert.equal(store.listEvents()[0].port, null);
+    assert.equal(store.recordSnapshot(snapshot('AABBCCDD', true), address).event, null);
+    const packet = { ...snapshot('AABBCCDD', true), rfid: { uid: 'AABBCCDD', placed: true, port: 3 } };
+    assert.equal(store.recordSnapshot(packet, address).event.port, 3);
+    store.close(); store = new DeviceStore(path);
+    assert.equal(store.recordSnapshot(packet, address).event, null);
+    assert.deepEqual(store.listDevices()[0].observedPorts, [3]);
+    assert.equal(store.listDevices()[0].lastRfid.port, 3);
+  } finally { store?.close(); rmSync(directory, { recursive: true, force: true }); }
+});

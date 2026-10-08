@@ -1,6 +1,6 @@
 {
   "name": "adventure-rooms-local",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -42,7 +42,11 @@
       {
         "from": "build/server",
         "to": "server",
-        "filter": ["AdventureRooms", "AdventureRooms.exe", "NODE-LICENSE.txt"]
+        "filter": [
+          "AdventureRooms",
+          "AdventureRooms.exe",
+          "NODE-LICENSE.txt"
+        ]
       }
     ],
     "asar": true,

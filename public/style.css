@@ -724,3 +724,19 @@ h1 {
   .sidebar-footer .local-label,.sidebar-footer .sidebar-note { display:none; }
   .sidebar-footer p { margin:0; font-size:10px; }
 }
+.controller-card { padding: 20px; margin: 16px 0; border: 1px solid #dce4e8; border-radius: 14px; background: #fff; }
+.controller-card h2 { font-size: 1rem; overflow-wrap: anywhere; }
+.reader-config-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; margin: 16px 0; }
+.reader-config-form label, .reader-manual-port label { display: grid; gap: 6px; font-size: .85rem; }
+.reader-manual-port { display: flex; align-items: end; gap: 12px; margin-top: 14px; }
+.reader-manual-port input { max-width: 160px; }
+.reader-confirm { grid-column: 1 / -1; padding: 14px; border: 1px solid #e5bab4; border-radius: 10px; }
+.reader-confirm button { margin-right: 8px; }
+@media(max-width:600px) { .reader-config-form { grid-template-columns: 1fr; } .controller-card { padding: 12px; } }
+.controller-summary { cursor: pointer; list-style: none; position: relative; padding-right: 24px; }
+.controller-summary::after { content: '+'; position: absolute; top: 0; right: 0; font-size: 20px; color: var(--muted); }
+.controller-card[open] > .controller-summary::after { content: '−'; }
+.controller-summary::-webkit-details-marker { display: none; }
+.controller-summary > .field-hint { display: block; margin-top: 5px; }
+.controller-summary strong { overflow-wrap: anywhere; }
+.controller-summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 5px; border-radius: 4px; }

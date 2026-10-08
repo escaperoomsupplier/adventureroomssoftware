@@ -1,3 +1,4 @@
+import { readerLabel } from './reader-label.js';
 const root = document.getElementById('reception');
 root.innerHTML = `<div class="rc-layout"><form id="rc-team-form" class="rc-panel"><h2>Add a team</h2><p class="rc-hint">Each room records its own time. Use its Start time and Stop time readers.</p><label for="rc-name">Team name</label><input id="rc-name" required maxlength="80" autocomplete="off"><button type="submit">Add team</button></form><form id="rc-card-form" class="rc-panel"><h2>Assign wristbands</h2><label for="rc-target">Team</label><select id="rc-target" required><option value="">Select a team</option></select><label for="rc-reader">Card assignment reader</label><select id="rc-reader" required><option value="">Select an online pairing reader</option></select><div class="rc-actions"><button id="rc-pair" type="submit">Start card assignment</button><button id="rc-stop-pair" type="button" class="secondary">Stop card assignment</button></div><p id="rc-pairing-status" class="rc-hint" role="status">Start assignment, then tap wristbands one by one. Each new card is added automatically.</p></form></div><p id="rc-error" role="alert" hidden></p><p id="rc-message" role="status"></p><div class="rc-section-heading"><h2>Teams</h2><span id="rc-connection" class="rc-hint">Waiting for live data…</span></div><div id="rc-teams"></div>`;
 const $ = (id) => document.getElementById(id);
@@ -282,7 +283,7 @@ export function updateReception(state = {}) {
   if (state.teams) {teams=state.teams;if(selectedTeamId && !teams.some(team=>team.id===selectedTeamId))selectedTeamId=null;renderProfiles();}
   if ('pairing' in state) pairing = state.pairing;
   connected = state.connected ?? connected;
-  options('rc-reader', readers.filter(reader => reader.configured && reader.role==='pairing' && Date.now()-Date.parse(reader.lastSeenAt)<=25000).map(reader => [reader.id, reader.name]), 'Select an online pairing reader');
+  options('rc-reader', readers.filter(reader => reader.configured && reader.role==='pairing' && Date.now()-Date.parse(reader.lastSeenAt)<=25000).map(reader => [reader.id, readerLabel(reader)]), 'Select an online pairing reader');
   options('rc-target', sessions.filter(available).map((session) => [session.id, session.teamName]), 'Select a team');
   render();
 }

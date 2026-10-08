@@ -1,6 +1,6 @@
 # Releases
 
-## Version 0.1.0
+## Version 0.2.0
 
 Adventure Rooms ships as a Windows x64 NSIS Setup executable and macOS disk images
 for Intel x64 and Apple Silicon arm64. The Electron desktop application opens its
@@ -37,7 +37,7 @@ Never run two servers against the same configuration directory.
 Windows installers are unsigned. macOS builds are ad-hoc signed and are not
 notarized. They do not carry a verified publisher identity, and operating-system
 security checks may block them. Publisher signing and notarization are not part
-of the 0.1.0 release process.
+of the 0.2.0 release process.
 
 ## Build locally
 
@@ -65,14 +65,14 @@ uses the repository's `config` directory by default and stops with Ctrl+C.
 
 ## GitHub Actions publication
 
-Run the release workflow manually, or push the `v0.1.0` tag for this version.
+Run the release workflow manually, or push the `v0.2.0` tag for this version.
 The workflow builds and smoke-tests Windows x64, macOS x64 and macOS arm64.
 Manual runs retain installers as workflow artifacts. A version tag publishes a
 GitHub Release only after every platform job succeeds.
 
 Before publishing, verify that:
 
-- The package version and release tag agree: `0.1.0` and `v0.1.0`.
+- The package version and release tag agree: `0.2.0` and `v0.2.0`.
 - Source tests and packaged server/desktop smoke checks pass on every platform.
 - The release contains Windows Setup and both macOS architecture installers.
 - No venue configuration, wristband data, runtime database or uploaded media is

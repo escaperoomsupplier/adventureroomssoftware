@@ -50,7 +50,7 @@ export class ScreenStore {
     const readerTrigger=input.trigger==='reader.used';
     const roomId=readerTrigger?null:input.roomId ?? null;
     const readerId=readerTrigger?input.readerId:null;
-    if(readerTrigger){if(!identifier(readerId))fail(400,'Choose an Other reader.');const exists=this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='reader_settings'").get();const reader=exists?this.db.prepare('SELECT configured,role FROM reader_settings WHERE device_id=?').get(readerId):null;if(!reader?.configured || reader.role!=='other')fail(400,'Automation requires a configured Other reader.');}
+    if(readerTrigger){if(!identifier(readerId))fail(400,'Choose an Other reader.');const exists=this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='reader_settings'").get();const reader=exists?this.db.prepare('SELECT configured,role FROM reader_settings WHERE reader_id=?').get(readerId):null;if(!reader?.configured || reader.role!=='other')fail(400,'Automation requires a configured Other reader.');}
     this.#room(roomId,lifecycle || readerTrigger);this.#get('screens',input.screenId);
     if(!['room.entered','room.exited','team.started','team.ended','reader.used'].includes(input.trigger) || !['replace','queue'].includes(input.mode) || typeof input.enabled!=='boolean') fail(400,'Invalid rule trigger, mode or enabled flag.');
     return {id:input.id,name:name(input.name),roomId,readerId,trigger:input.trigger,screenId:input.screenId,action:this.#action(input.action),mode:'replace',enabled:input.enabled};

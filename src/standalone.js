@@ -4,7 +4,7 @@ import { startServer } from './server.js';
 import { readSettings } from './config.js';
 
 // Replaced with package.json's version by the native build.
-const version = process.env.ADVENTURE_BUILD_VERSION || '0.1.0';
+const version = process.env.ADVENTURE_BUILD_VERSION || '0.2.0';
 async function main() {
   if (process.argv.includes('--version')) { console.log(version); return; }
   const directory = resolve(process.env.CONFIG_DIR ?? resolve(dirname(process.execPath), 'config'));

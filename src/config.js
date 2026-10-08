@@ -1,3 +1,4 @@
+import { inferDevicePortCount } from './protocol.js';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, openSync, fsyncSync, closeSync } from 'node:fs';
@@ -93,7 +94,7 @@ export class PortableConfig {
   #export() {
     const items = {};
     items.rooms = this.db.prepare('SELECT id,name,x,y,width,height FROM rooms ORDER BY rowid').all().map(row => ({ ...row }));
-    items.readers = this.db.prepare(`SELECT device_id AS id,name,configured,room_id AS roomId,x,y,role FROM reader_settings ORDER BY device_id`).all()
+    items.readers = this.db.prepare(`SELECT reader_id AS id,device_id AS deviceId,port,name,configured,room_id AS roomId,x,y,role FROM reader_settings ORDER BY reader_id`).all()
       .map(row => ({ ...row, configured: Boolean(row.configured) }));
     for (const kind of ['screens', 'rules', 'media']) items[kind] = this.db.prepare('SELECT json FROM configuration_items WHERE kind=? ORDER BY id').all(kind).map(row => JSON.parse(row.json));
     return { ...Object.fromEntries(kinds.map(kind => [kind, { schemaVersion: 1, items: items[kind] }])), settings: { ...this.settings } };
@@ -134,14 +135,25 @@ export class PortableConfig {
       const created = rooms.createRoom(room);
       this.db.prepare('UPDATE rooms SET id=? WHERE id=?').run(room.id, created.id);
     }
+    const mappings = new Set();
     for (const reader of bundle.readers.items) {
-      if (!/^[A-Za-z0-9_-]{14}$/.test(reader.id) || typeof reader.name !== 'string' || !reader.name.trim() || reader.name.trim().length > 80 ||
+      const deviceId = reader.deviceId ?? reader.id;
+      const port = reader.port ?? null;
+      const canonical = /^([A-Za-z0-9_-]{14})-p([1-9][0-9]*)$/.exec(reader.id);
+      if (canonical && (canonical[1] !== deviceId || Number(canonical[2]) !== port)) invalid('Canonical reader ID must match its controller and port.');
+      if (/^[A-Za-z0-9_-]{14}$/.test(reader.id) && reader.id !== deviceId) invalid('Controller-shaped reader ID must match its controller.');
+      const key = `${deviceId}:${port}`;
+      if (mappings.has(key)) invalid('Duplicate controller port.');
+      mappings.add(key);
+      const portCount = inferDevicePortCount(deviceId);
+      if (port !== null && (!Number.isInteger(port) || port < 1 || port > (portCount ?? 255))) invalid('Invalid reader port.');
+      if (!/^[A-Za-z0-9_-]{14}$/.test(deviceId) || typeof reader.name !== 'string' || !reader.name.trim() || reader.name.trim().length > 80 ||
           typeof reader.configured !== 'boolean' || !['entry', 'start', 'stop', 'finish', 'exit', 'pairing', 'other'].includes(reader.role) ||
           !Number.isInteger(reader.x) || reader.x < 0 || reader.x > 10000 || !Number.isInteger(reader.y) || reader.y < 0 || reader.y > 10000) invalid('Invalid reader configuration.');
-      this.db.prepare(`INSERT OR IGNORE INTO devices(id,address,last_seen_at) VALUES(?,'','1970-01-01T00:00:00.000Z')`).run(reader.id);
+      this.db.prepare(`INSERT OR IGNORE INTO devices(id,address,last_seen_at) VALUES(?,'','1970-01-01T00:00:00.000Z')`).run(deviceId);
       const room = reader.roomId ? this.db.prepare('SELECT width,height FROM rooms WHERE id=?').get(reader.roomId) : null;
-      this.db.prepare('INSERT INTO reader_settings(device_id,name,configured,room_id,x,y,role) VALUES(?,?,?,?,?,?,?)')
-        .run(reader.id, reader.name.trim(), Number(reader.configured), reader.roomId ?? null,
+      this.db.prepare('INSERT INTO reader_settings(reader_id,device_id,port,name,configured,room_id,x,y,role) VALUES(?,?,?,?,?,?,?,?,?)')
+        .run(reader.id, deviceId, port, reader.name.trim(), Number(reader.configured), reader.roomId ?? null,
           room ? Math.min(reader.x, room.width) : reader.x, room ? Math.min(reader.y, room.height) : reader.y, ({entry:'start',finish:'stop',exit:'stop'})[reader.role] ?? reader.role);
     }
     for (const kind of ['screens', 'rules', 'media']) for (const item of bundle[kind].items) {

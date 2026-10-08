@@ -23,7 +23,7 @@ const assets = new Map([
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/reception.js', ['reception.js', 'text/javascript; charset=utf-8']],
   ...['venue-map', 'reception', 'workflow', 'media-settings', 'screen-player'].map(name => [`/${name}.css`, [`${name}.css`, 'text/css; charset=utf-8']]),
-  ...['venue-map', 'leaderboard', 'ui', 'media-settings', 'screen-player', 'screen-picker'].map(name => [`/${name}.js`, [`${name}.js`, 'text/javascript; charset=utf-8']]),
+  ...['venue-map', 'leaderboard', 'ui', 'media-settings', 'screen-player', 'screen-picker', 'reader-label', 'reader-management'].map(name => [`/${name}.js`, [`${name}.js`, 'text/javascript; charset=utf-8']]),
   ['/screens', ['screen-picker.html', 'text/html; charset=utf-8']],
   ['/navigation.js', ['navigation.js', 'text/javascript; charset=utf-8']],
   ['/overview.js', ['overview.js', 'text/javascript; charset=utf-8']],
@@ -104,11 +104,11 @@ export async function startServer({
     if (pairing) {
       const reader = venue.listReaders().find(item => item.id === pairing.readerId);
       const team = reception.listSessions().find(item => item.id === pairing.sessionId);
-      if (!reader?.configured || reader.role !== 'pairing' || !['pending','active'].includes(team?.status)) pairing = null;
+      if (!reader?.configured || reader.role !== 'pairing' || (reader.deviceId ?? reader.id) !== pairing.deviceId || (reader.port ?? null) !== pairing.port || !['pending','active'].includes(team?.status)) pairing = null;
     }
     return pairing;
   };
-  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: venue.listReaders(), readers: venue.listReaders(), events: store.listEvents(15), sessions: reception.listSessions(), teams: reception.listTeams(), rooms: rooms.listRooms(), leaderboard: venue.listLeaderboard(), roomLeaderboards: roomLeaderboards(), pairing: pairingState(), screens: screensWithPresence(), rules: screens.listRules(), media: screens.listMedia() })}\n\n`;
+  const stateFrame = () => `data: ${JSON.stringify({ health: health(), devices: store.listDevices(), readers: venue.listReaders(), events: store.listEvents(15), sessions: reception.listSessions(), teams: reception.listTeams(), rooms: rooms.listRooms(), leaderboard: venue.listLeaderboard(), roomLeaderboards: roomLeaderboards(), pairing: pairingState(), screens: screensWithPresence(), rules: screens.listRules(), media: screens.listMedia() })}\n\n`;
   const sendFrame = (res, frame) => {
     // Disconnect slow readers instead of allowing an unbounded outgoing queue.
     if (res.destroyed || res.writableLength > 256 * 1024) {
@@ -239,7 +239,7 @@ export async function startServer({
       if (historyRoute && req.method === 'GET') return json(res, 200, { visits: venue.getHistory(historyRoute[1]) });
       const captureRoute = /^\/api\/captures\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
       if (captureRoute && req.method === 'GET') return json(res, 200, { capture: captures.get(captureRoute[1]) });
-      const readerRoute = /^\/api\/readers\/([A-Za-z0-9_-]{14})(\/capture)?$/.exec(pathname);
+      const readerRoute = /^\/api\/readers\/([A-Za-z0-9_-]{1,128})(\/capture)?$/.exec(pathname);
       const resultRoute = /^\/api\/leaderboard\/([A-Za-z0-9_-]{1,128})$/.exec(pathname);
       if ((readerRoute && ['PATCH', 'POST', 'DELETE'].includes(req.method)) || (captureRoute && req.method === 'DELETE') || (resultRoute && req.method === 'DELETE')) {
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Cross-origin changes are not allowed' });
@@ -312,7 +312,7 @@ export async function startServer({
           if (!reader?.configured || reader.role !== 'pairing' || Date.now()-Date.parse(reader.lastSeenAt)>25000) return json(res, 409, {error:'Choose an online Card assignment reader.'});
           const team = reception.getSession(body.sessionId);
           if (!['pending','active'].includes(team.status)) return json(res, 409, {error:'Choose a current team.'});
-          pairing = {readerId:reader.id,sessionId:team.id,lastUid:null,error:null};
+          pairing = {readerId:reader.id,deviceId:reader.deviceId ?? reader.id,port:reader.port ?? null,sessionId:team.id,lastUid:null,error:null};
           publishOperators(); return json(res, 200, {pairing});
         }
       }
@@ -382,20 +382,21 @@ export async function startServer({
         catch { return json(res, 400, { error: 'Invalid UUPC snapshot' }); }
         const readersBeforeSnapshot = venue.listReaders();
         captures.sweep(readersBeforeSnapshot);
-        const captureBaselineReady = readersBeforeSnapshot.find(reader => reader.id === snapshot.id)?.rfidBaselineEstablished === true;
+        const sourceReader = readersBeforeSnapshot.find(reader => reader.configured && (reader.deviceId ?? reader.id) === snapshot.id && (reader.port ?? null) === (snapshot.rfid?.port ?? null));
+        const captureBaselineReady = sourceReader?.rfidBaselineEstablished === true;
         let capture = null, pairingUpdate = null;
         const currentPairing = pairingState();
         const recorded = store.recordSnapshot(snapshot, req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? 'unknown', data => {
           // Explicitly armed pairing may accept the first RFID snapshot after UDP discovery.
           // Existing unchanged values never count as a new tap when arming/rearming.
-          const pairingUid = currentPairing?.readerId === data.device.id && snapshot.rfid?.placed &&
+          const pairingUid = currentPairing && sourceReader?.id === currentPairing.readerId && snapshot.rfid?.placed &&
             (data.event?.type === 'rfid.placed' || !data.previous?.lastRfid) ? snapshot.rfid.uid : null;
           const pairingRead = pairingUid !== null;
           if (pairingRead) {
             try { reception.assignCard(currentPairing.sessionId, pairingUid); pairingUpdate = {...currentPairing,lastUid:pairingUid,error:null}; }
             catch (error) { if (error.status !== 409) throw error; pairingUpdate = {...currentPairing,lastUid:pairingUid,error:error.message}; }
           }
-          capture = !pairingRead && captureBaselineReady ? captures.match(data) : null;
+          capture = !pairingRead && captureBaselineReady ? captures.match({ ...data, readerId: sourceReader?.id }) : null;
           venue.applySnapshot(capture || pairingRead ? { ...data, event: null } : data);
           screens.syncEvents(venue.listDomainEvents(screens.getEventCursor()));
         });
@@ -425,7 +426,7 @@ export async function startServer({
       if (req.method === 'GET' && pathname === '/api/health') {
         return json(res, 200, health());
       }
-      if (req.method === 'GET' && pathname === '/api/devices') return json(res, 200, venue.listReaders());
+      if (req.method === 'GET' && pathname === '/api/devices') return json(res, 200, store.listDevices());
       if (req.method === 'GET' && pathname === '/api/events') return json(res, 200, store.listEvents(15));
       const playerPage = /^\/screens\/[A-Za-z0-9_-]{1,128}$/.test(pathname);
       if (req.method === 'GET' && (assets.has(pathname) || playerPage)) {
