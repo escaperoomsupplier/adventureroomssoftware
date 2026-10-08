@@ -1,28 +1,31 @@
-# Adventure Rooms 0.1.0
+# Adventure Rooms 0.2.0
 
-First installable release for local adventure room operations.
+Independent RFID readers on multiple ports of one UUPC controller.
 
-## Downloads
+## What changed
 
-- **Windows x64:** run the `windows-x64-setup.exe` installer.
-- **Mac with Apple Silicon:** open the `macos-arm64.dmg` file and drag Adventure Rooms to Applications.
-- **Mac with Intel:** use `macos-x64.dmg` instead.
+- New firmware messages `UID_placed_port` route to the exact controller and port. Repeated snapshots are deduplicated using all three fields.
+- A 14-digit numeric UUPC serial provides port capacity through digits 11–12. Known controllers expose ports 1 through their capacity; unknown IDs support observed ports and manual configuration.
+- Each configured port has its own name, room, position and Start time, Stop time, Card assignment or Other role. One controller can serve multiple rooms.
+- Readers are grouped by controller. The map places individual readers, and details retain controller ID, IP address and port for troubleshooting.
+- Pairing, one-shot card capture and automations are isolated by port. Deleting one reader preserves its controller, other readers and recorded history.
 
-Node.js is included. The app opens its own window and runs an HTTP server with UDP UUPC discovery on your local network. Quit the app to stop its server. Do not run it alongside another ERCC instance or a source server using the same ports.
+## Upgrade from 0.1.0
 
-## Features
+Open **File > Open configuration folder**, then quit the application and back up the complete folder before installing. Existing reader names, rooms, roles and automation references are migrated automatically.
 
-- Interactive room map and named RFID readers, including Start time, Stop time, Card assignment and Other roles.
-- Independent room timers, multiple wristbands per team and returning-team search.
-- Saved room/global rankings with explicit keep-or-replace decisions for repeat attempts.
-- Room displays, room/global leaderboard displays and media automation.
-- Image/video/audio library with previews and replacement without breaking references.
-- Local JSON configuration and SQLite history; no cloud connection required.
+Existing single-reader mappings retain **Legacy / port unknown** until you explicitly choose their physical port in Readers or the map inspector. Legacy mappings accept only older messages without a port; they never guess the source of new numbered-port messages. Choose the correct port before using an upgraded controller for room timing or wristband assignment.
 
-Use **File > Open configuration folder** to locate the local `config` folder, then quit the app before copying or backing it up. Existing source-checkout data can be copied there while both servers are stopped; keep the whole folder together.
+The new configuration format supports several readers per controller. Restore your complete pre-upgrade backup if reverting to 0.1.0.
 
-## Known limitations
+## Installers
 
-This release is not signed with a verified publisher certificate or notarized by Apple, so operating-system security warnings may appear. It is intended for a trusted venue LAN and has no authentication. One RFID reader per UUPC is assumed. It does not send puzzle hardware commands.
+- Windows x64: run the `windows-x64-setup.exe` installer.
+- Apple Silicon Mac: open `macos-arm64.dmg` and drag Adventure Rooms to Applications.
+- Intel Mac: use `macos-x64.dmg`.
 
-Installer builds and packaged launch/shutdown checks run on Windows, Intel macOS and Apple Silicon macOS. SHA256SUMS.txt contains download checksums.
+Node.js is included. Runtime operation remains local. Do not run two servers on the same ports or configuration folder.
+
+Windows builds are unsigned. macOS builds use ad-hoc signing and are not notarized. Operating-system security checks may block the first launch. Green reader indicators confirm controller contact, not individual RFID sensor presence. Firmware snapshots are not a durable event stream; after startup or a contact gap, establish a baseline and tap again.
+
+Source tests and packaged launch/shutdown checks run on Windows and both Mac architectures. SHA256SUMS.txt contains installer download checksums.

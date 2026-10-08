@@ -1,6 +1,6 @@
 # Adventure Rooms
 
-**Version 0.1.0** — local software for running an adventure-room venue with UUPC
+**Version 0.2.0** — local software for running an adventure-room venue with UUPC
 controllers and RFID wristbands. Manage reception, room timing, results, media
 and display screens from one desktop application. All venue data stays on your
 computer; other screens connect through your local network. No cloud account is
@@ -32,7 +32,7 @@ puzzle hardware or door locks, and the map does not verify physical occupancy.
 ## Download and install
 
 Open the [GitHub releases](https://github.com/escaperoomsupplier/adventureroomssoftware/releases)
-and select **v0.1.0**. Choose the installer for your computer:
+and select **v0.2.0**. Choose the installer for your computer:
 
 | Computer | Installer |
 | --- | --- |
@@ -60,9 +60,14 @@ discover the server and push state through HTTP. Allow these ports through the
 firewall on your trusted venue network.
 
 Do not run another ERCC receiver on the same device network simultaneously.
-Firmware retains the first discovered ERCC address; switching receivers may
-require restarting controllers. A fixed server address or DHCP reservation helps
-displays reconnect reliably. One RFID reader per UUPC is assumed.
+Receiver switching depends on firmware configuration. Older firmware may retain
+the first discovered ERCC address until restart; newer SW10 firmware can switch receivers. A fixed server address or DHCP reservation helps
+displays reconnect reliably. Each UUPC can expose multiple ports. Configure each
+RFID port independently with its own name, room and role. For the 14-digit numeric
+serial format documented in the UUPC wiki, positions 1–8 contain the production
+date (`YYYYMMDD`) and positions 11–12 contain the port count. Recognized serials
+automatically expose port choices; unrecognized serials allow manual port entry.
+Controller contact does not prove sensor presence.
 
 The operator interface is also available at [localhost:4000](http://localhost:4000).
 On another display, open `http://SERVER-LAN-IP:4000/screens`, choose a screen and
@@ -129,7 +134,7 @@ Build tooling is separate from the dependency-free source server. Releases use
 an Electron desktop window and an included Node SEA server executable. Build on
 the target platform. The GitHub Actions release workflow builds and smoke-tests
 Windows x64, macOS x64 and macOS arm64. Manual workflow runs retain downloadable
-build artifacts; pushing the `v0.1.0` tag publishes a release after all platform
+build artifacts; pushing the `v0.2.0` tag publishes a release after all platform
 checks pass.
 
 ## Guides

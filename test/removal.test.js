@@ -26,13 +26,13 @@ test('reader removal persists configuration while preserving visits, RFID histor
   const {dir,store,reception,rooms,venue,config,room,session,post}=fixture(t);
   const before=reception.getSession(session.id),history=venue.getHistory(session.id),events=store.listEvents();
   config.change(()=>venue.deleteReader(id));
-  assert.deepEqual(venue.listReaders(),[]);assert.deepEqual(store.listDevices(),[]);
+  assert.equal(venue.listReaders()[0].configured,false);assert.equal(store.listDevices().length,1);
   assert.equal(rooms.getRoom(room.id).deviceId,null);
   assert.deepEqual(JSON.parse(readFileSync(join(dir,'readers.json'),'utf8')).items,[]);
   assert.deepEqual(venue.getHistory(session.id),history);assert.deepEqual(store.listEvents(),events);
   assert.equal(reception.getSession(session.id).endsAt,before.endsAt);assert.equal(reception.getSession(session.id).status,'active');
   store.recordDiscovery({id,address:'127.0.0.1'});
-  assert.equal(venue.listReaders()[0].configured,false);assert.equal(venue.listReaders()[0].rfidBaselineEstablished,false);
+  assert.equal(venue.listReaders()[0].configured,false);assert.equal(venue.listReaders()[0].rfidBaselineEstablished,true);
   post('AABBCCDD',true);assert.deepEqual(store.listEvents(),events);assert.deepEqual(venue.getHistory(session.id),history);
 });
 test('failed configuration change rolls removal and baseline back with JSON untouched',t=>{
@@ -66,5 +66,5 @@ test('HTTP reader deletion cancels waiting capture only after success and protec
   assert.equal((await request(`/api/readers/${id}`,'DELETE')).status,404);
   const room=await(await request('/api/rooms','POST',{name:'Empty'})).json();
   assert.equal((await request(`/api/rooms/${room.room.id}`,'DELETE')).status,200);
-  assert.deepEqual(await(await fetch(base+'/api/readers')).json(),[]);
+  assert.equal((await(await fetch(base+'/api/readers')).json())[0].configured,false);
 });

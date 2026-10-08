@@ -1,3 +1,4 @@
+import { readerLabel } from './reader-label.js';
 import { node, table } from './ui.js';
 
 let state = { rooms: [], readers: [], screens: [], rules: [], media: [], connected: false };
@@ -223,8 +224,8 @@ function refreshMediaOptions() {
 }
 export function updateMediaSettings(next) {
   state = { ...state, ...next }; controls();
-  const key = JSON.stringify([state.screens, state.rooms, state.rules, state.media, state.readers.map(reader=>[reader.id,reader.name,reader.configured,reader.role])]); if (signature === key) return; signature = key;
-  options(ruleReader,state.readers.filter(reader=>reader.configured && reader.role==='other').map(reader=>[reader.id,reader.name]),'Select Other reader');
+  const key = JSON.stringify([state.screens, state.rooms, state.rules, state.media, state.readers.map(reader=>[reader.id,reader.name,reader.port,reader.configured,reader.role])]); if (signature === key) return; signature = key;
+  options(ruleReader,state.readers.filter(reader=>reader.configured && reader.role==='other').map(reader=>[reader.id,readerLabel(reader)]),'Select Other reader');
   const roomItems = state.rooms.map(r => [r.id, r.name]); options(screenRoom, roomItems, 'Unassigned'); options(rankingRoom, roomItems, 'Select ranking room'); options(ruleRoom, roomItems, 'Select room');
   options(ruleScreen, state.screens.map(s => [s.id, s.name]), 'Select screen'); refreshMediaOptions();
   const roomName = id => state.rooms.find(r => r.id === id)?.name ?? 'Unassigned';

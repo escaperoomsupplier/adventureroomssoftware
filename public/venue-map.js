@@ -1,3 +1,4 @@
+import { readerLabel, controllerId } from './reader-label.js';
 const mount = document.getElementById('venue-map');
 const NS = 'http://www.w3.org/2000/svg';
 const node = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
@@ -5,12 +6,12 @@ const svgNode = (tag, attrs = {}) => { const e = document.createElementNS(NS, ta
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const snap = value => Math.round(value / 20) * 20;
 const roles = { start: 'Start time', stop: 'Stop time', pairing: 'Card assignment', other: 'Other' };
-let rooms = [], readers = [], screens = [], sessions = [], connected = false, locked = true, pending = false;
+let devices = [], rooms = [], readers = [], screens = [], sessions = [], connected = false, locked = true, pending = false;
 let selected = null, gesture = null, signature = '', listSignature = '', flashTimer, suppressClick = false;
 let placement = null;
 let view = { x: 500, y: 700, w: 1000, h: 600 };
 const canEdit = () => !locked && connected && !pending;
-const online = (type,item) => connected && (type === 'screen' ? item.online === true : Number.isFinite(Date.parse(item.lastSeenAt)) && Date.now() - Date.parse(item.lastSeenAt) <= 25000);
+const online = (type,item) => { const source=type==='reader' ? devices.find(d=>d.id===controllerId(item)) || item : item; return connected && (type === 'screen' ? item.online === true : Number.isFinite(Date.parse(source.lastSeenAt)) && Date.now() - Date.parse(source.lastSeenAt) <= 25000); };
 function itemIcon(type) {
   const icon=svgNode('svg',{viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':1.7,'aria-hidden':'true',class:'vm-item-icon'});
   if(type==='screen')icon.append(svgNode('rect',{x:3,y:4,width:18,height:13,rx:2}),svgNode('path',{d:'M8 21h8M12 17v4'}));
@@ -18,11 +19,11 @@ function itemIcon(type) {
   return icon;
 }
 function decorateButton(b,type,item) {
-  const label=node('span',item.name || item.id,'vm-item-label'),dot=node('span',undefined,`vm-contact-dot ${online(type,item)?'vm-contact-online':'vm-contact-offline'}`);
-  dot.setAttribute('aria-hidden','true');b.replaceChildren(itemIcon(type),label,dot);b.classList.add('vm-item-button');b.setAttribute('aria-label',`${type==='screen'?'Screen':'Reader'} ${item.name || item.id}, ${online(type,item)?'connected':'offline'}`);return b;
+  const label=node('span',type==='reader'?readerLabel(item):(item.name || item.id),'vm-item-label'),dot=node('span',undefined,`vm-contact-dot ${online(type,item)?'vm-contact-online':'vm-contact-offline'}`);
+  dot.setAttribute('aria-hidden','true');b.replaceChildren(itemIcon(type),label,dot);b.classList.add('vm-item-button');b.setAttribute('aria-label',`${type==='screen'?'Screen':'Reader'} ${type==='reader'?readerLabel(item):(item.name || item.id)}, ${online(type,item)?(type==='reader'?'controller online; sensor presence unknown':'connected'):'offline'}`);return b;
 }
 const collection = type => type === 'room' ? rooms : type === 'reader' ? readers : screens;
-const itemFor = (type, id) => collection(type).find(item => item.id === id);
+const itemFor = (type, id) => collection(type).find(item => item.id === id) || (type==='reader' && placement?.reader?.id===id ? placement.reader : null);
 const button = (text, action) => { const b = node('button', text); b.type = 'button'; b.addEventListener('click', action); return b; };
 const shell = node('section', undefined, 'vm-shell');
 const header = node('div', undefined, 'vm-header');
@@ -46,8 +47,8 @@ const status = node('span', '', 'vm-status'); status.setAttribute('role', 'statu
 const error = node('p', '', 'vm-error'); error.setAttribute('role', 'alert'); error.hidden = true;
 const layout = node('div', undefined, 'vm-layout');
 const canvas = svgNode('svg', { class: 'vm-canvas', tabindex: '0', 'aria-label': 'Venue map. Tab to select items. Arrow keys move selected items; Shift and arrows resize rooms.' });
-const readerDialog=node('dialog',undefined,'vm-reader-dialog');readerDialog.setAttribute('aria-label','Choose an online reader');
-readerDialog.append(node('h3','Choose an online reader'),node('p','Select a reader, then click a room on the map. Click outside a room or press Escape to cancel.','vm-help'));
+const readerDialog=node('dialog',undefined,'vm-reader-dialog');readerDialog.setAttribute('aria-label','Choose a controller port');
+readerDialog.append(node('h3','Choose a controller port'),node('p','Choose an RFID port on an online controller, then click a room. Online means controller contact; sensor presence is unknown. Escape cancels.','vm-help'));
 const readerList=node('div',undefined,'vm-reader-list');readerDialog.append(readerList,button('Cancel',()=>readerDialog.close()));
 const nameDialog=node('dialog',undefined,'vm-reader-dialog vm-name-dialog');
 const nameTitle=node('h3');nameTitle.id='vm-create-title';nameDialog.setAttribute('aria-labelledby',nameTitle.id);
@@ -154,7 +155,7 @@ function accessible(g, type, id, label) {
 }
 function draw(force = false) {
   if (gesture && !force) return;
-  const next = JSON.stringify([rooms, readers.map(r => [r.id,r.name,r.configured,r.roomId,r.x,r.y,r.role,online('reader',r)]), screens.map(s => [s.id,s.name,s.roomId,s.x,s.y,online('screen',s)]), sessions.map(s => [s.id,s.teamName,s.status,s.currentRoomId]), rooms.map(contact), selected, locked, view]);
+  const next = JSON.stringify([rooms, readers.map(r => [r.id,r.name,r.configured,r.roomId,r.x,r.y,r.role,r.port,online('reader',r)]), screens.map(s => [s.id,s.name,s.roomId,s.x,s.y,online('screen',s)]), sessions.map(s => [s.id,s.teamName,s.status,s.currentRoomId]), rooms.map(contact), selected, locked, view]);
   if (!force && signature === next && !placement) return; signature = next;
   const focusKey = canvas.contains(document.activeElement) ? document.activeElement.dataset.key : null;
   canvas.replaceChildren(); canvas.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
@@ -164,7 +165,7 @@ function draw(force = false) {
   const displayRooms = rooms.map(r => gesture?.kind === 'room' && gesture.id === r.id ? { ...r, ...gesture.preview } : r);
   for (const room of displayRooms) {
     const g = svgNode('g', { class: `vm-room vm-${contact(room)}${selected?.type === 'room' && selected.id === room.id ? ' vm-selected' : ''}` });
-    accessible(g, 'room', room.id, `${room.name}, ${contact(room) === 'online' ? 'readers recently seen' : contact(room) === 'offline' ? 'reader contact missing' : 'no contact status'}`);
+    accessible(g, 'room', room.id, `${room.name}, ${contact(room) === 'online' ? 'controller contact recent' : contact(room) === 'offline' ? 'controller contact missing' : 'no contact status'}`);
     g.append(svgNode('rect', { x: room.x, y: room.y, width: room.width, height: room.height, rx: 10 }));
     const name = svgNode('text', { x: room.x + room.width / 2, y: room.y + room.height / 2, 'text-anchor': 'middle', class: 'vm-room-name' }); name.textContent = room.name; g.append(name);
     g.addEventListener('pointerdown', e => begin(e, 'room', itemFor('room', room.id))); canvas.append(g);
@@ -189,13 +190,13 @@ function draw(force = false) {
     const room = displayRooms.find(r => r.id === item.roomId); if (item.roomId && !room) continue;
     const x = (room?.x || 0) + (room ? clamp(item.x,0,Math.max(0,room.width-116)) : item.x), y = (room?.y || 0) + (room ? clamp(item.y,0,Math.max(0,room.height-42)) : item.y);
     const g = svgNode('g', { class: `vm-block vm-${type}${selected?.type === type && selected.id === item.id ? ' vm-selected' : ''}` });
-    accessible(g, type, item.id, `${type === 'screen' ? 'Screen' : 'Reader'} ${item.name || item.id}, ${online(type,item)?'connected':'offline'}`);
+    accessible(g, type, item.id, `${type === 'screen' ? 'Screen' : 'Reader'} ${item.name || item.id}, ${online(type,item)?(type==='reader'?'controller online; sensor presence unknown':'connected'):'offline'}`);
     g.append(svgNode('rect', { x, y, width: 116, height: 42, rx: 6 }));
     const icon=itemIcon(type);icon.setAttribute('x',x+96);icon.setAttribute('y',y+26);icon.setAttribute('width',13);icon.setAttribute('height',13);g.append(icon);
     const dot=svgNode('circle',{cx:x+106,cy:y+11,r:3.5,class:`vm-contact-dot ${online(type,item)?'vm-contact-online':'vm-contact-offline'}`});g.append(dot);
     const text = svgNode('text', { x: x + 9, y: y + 17 }); text.textContent = (item.name || item.id).slice(0, 14); g.append(text);
-    const label = svgNode('text', { x: x + 9, y: y + 32, class: 'vm-block-sub' }); label.textContent = type === 'screen' ? 'Screen' : roles[item.role] || 'Reader'; g.append(label);
-    const title = svgNode('title'); title.textContent = item.name || item.id; g.append(title);
+    const label = svgNode('text', { x: x + 9, y: y + 32, class: 'vm-block-sub' }); label.textContent = type === 'screen' ? 'Screen' : `P${item.port ?? '?'} - ${roles[item.role] || 'Reader'}`; g.append(label);
+    const title = svgNode('title'); title.textContent = type==='reader' ? `${readerLabel(item)} - Controller ${controllerId(item)}; sensor presence unknown` : item.name || item.id; g.append(title);
     g.addEventListener('pointerdown', e => begin(e, type, original)); canvas.append(g);
   }
   if(placement?.point){
@@ -207,12 +208,30 @@ function draw(force = false) {
   }
   if (focusKey) [...canvas.querySelectorAll('[data-key]')].find(e => e.dataset.key === focusKey)?.focus({ preventScroll: true });
 }
+function beginReaderPlacement(reader) {
+  const device=devices.find(d=>d.id===controllerId(reader));
+  if(!canEdit() || !device || !online('reader',device))return;
+  readerDialog.close();placement={type:'reader',id:reader.id,reader,point:null};canvas.focus();syncControls();draw(true);
+}
 function listReaders() {
-  const available=readers.filter(reader=>online('reader',reader));
-  const next=JSON.stringify(available.map(reader=>[reader.id,reader.name]));if(next===listSignature)return;listSignature=next;
+  const available=devices.filter(device=>online('reader',device));
+  const next=JSON.stringify([available.map(d=>[d.id,d.address,d.portCount]),readers.map(r=>[r.id,r.name,r.port,r.configured,r.deviceId])]);if(next===listSignature)return;listSignature=next;
   const focused=document.activeElement?.dataset.readerId;readerList.replaceChildren();
-  for(const reader of available){const b=decorateButton(button('',()=>{const current=itemFor('reader',reader.id);if(!canEdit() || !current || !online('reader',current))return;readerDialog.close();placement={type:'reader',id:current.id,point:null};canvas.focus();syncControls();draw(true);}), 'reader',reader);b.dataset.readerId=reader.id;readerList.append(b);}
-  if(!available.length)readerList.append(node('p','No online readers available.','vm-help'));
+  for(const device of available) {
+    const group=node('section',undefined,'vm-controller-group');group.append(node('h4',device.id),node('p',`${device.address || 'Address unknown'}  -  Controller online`,'vm-help'));
+    const ports=readers.filter(r=>controllerId(r)===device.id && r.port!=null).sort((a,b)=>a.port-b.port);
+    for(const reader of ports) {
+      const b=decorateButton(button('',()=>{const current=itemFor('reader',reader.id);if(current)beginReaderPlacement(current);}), 'reader',reader);
+      b.dataset.readerId=reader.id;group.append(b);
+    }
+    if(readers.some(r=>controllerId(r)===device.id && r.port==null))group.append(node('p','A legacy reader needs a port assignment. Edit it on the Readers page or map before use.','vm-help'));
+    if(!device.portCount) {
+      const form=node('form',undefined,'vm-manual-port'),port=field(form,'Port number','');port.type='number';port.min='1';port.max='255';
+      const choose=node('button','Choose port');choose.type='submit';form.append(choose);form.onsubmit=e=>{e.preventDefault();const number=Number(port.value),current=devices.find(d=>d.id===device.id);if(!current)return;beginReaderPlacement(readers.find(r=>controllerId(r)===device.id && r.port===number) || {id:`${device.id}-p${number}`,deviceId:device.id,port:number,name:`RFID port ${number}`,configured:false,lastSeenAt:current.lastSeenAt,address:current.address});};group.append(form);
+    }
+    readerList.append(group);
+  }
+  if(!available.length)readerList.append(node('p','No online controllers available.','vm-help'));
   if(focused)[...readerList.querySelectorAll('button')].find(b=>b.dataset.readerId===focused)?.focus({preventScroll:true});
 }
 function cancelPlacement(){placement=null;if(readerDialog.open)readerDialog.close();if(nameDialog.open)nameDialog.close();syncControls();draw(true);}
@@ -225,7 +244,7 @@ function field(form, title, value, choices) {
 function refreshAssigned() {
   const target = inspector.querySelector('[data-assigned-room]'); if (!target) return;
   const items = ['reader','screen'].flatMap(type => collection(type).filter(item => item.roomId === target.dataset.assignedRoom && (type !== 'reader' || item.configured)).map(item => ({type,item})));
-  const next = JSON.stringify(items.map(({type,item}) => [type,item.id,item.name,online(type,item)]));
+  const next = JSON.stringify(items.map(({type,item}) => [type,item.id,item.name,item.port,online(type,item)]));
   if (target.dataset.signature === next) return; target.dataset.signature = next; target.replaceChildren();
   for (const type of ['reader','screen']) {
     const group = node('section', undefined, 'vm-assigned-group');
@@ -249,8 +268,13 @@ function select(type, id) {
   if (type === 'room') data = () => ({ name: name.value.trim() });
   else {
     const assigned = field(form, 'Room', current?.roomId || '', [['','Unassigned'], ...rooms.map(r => [r.id,r.name])]);
+    const legacy = type==='reader' && current.id===controllerId(current);
+    const capacity = type==='reader' ? current.portCount || devices.find(d=>d.id===controllerId(current))?.portCount || 255 : 0;
+    const port = type === 'reader' ? field(form, 'Controller port', current.port ?? '', legacy ? [['','Legacy / port unknown'],...Array.from({length:capacity},(_,index)=>[String(index+1),`Port ${index+1}`])] : [[String(current.port),`Port ${current.port}`]]) : null;
+    if(port)port.required=!legacy;
+    if(legacy)form.append(node('p','Keep Legacy / port unknown for unaddressed firmware. A numbered port explicitly migrates this reader.','vm-help'));
     const role = type === 'reader' ? field(form, 'Role', current?.role || 'start', Object.entries(roles)) : null;
-    data = () => ({ name: name.value.trim(), roomId: assigned.value || null, ...(role ? { role: role.value, configured: true } : {}) });
+    data = () => ({ name: name.value.trim(), roomId: assigned.value || null, ...(role ? { role: role.value, configured: true, port:legacy && port.value==='' ? null : Number(port.value) } : {}) });
   }
   const initial = data();
   const save = node('button', id ? 'Save' : 'Create'); save.type = 'submit'; save.dataset.save = 'true'; form.append(save);
@@ -357,11 +381,11 @@ canvas.addEventListener('dragover',e=>{if(canEdit() && [...e.dataTransfer.types]
 canvas.addEventListener('drop',async e=>{
   if(!canEdit())return; e.preventDefault(); const id=e.dataTransfer.getData('application/x-venue-reader'), reader=itemFor('reader',id);if(!reader)return;
   const p=point(e),room=roomAt(p);if(!room)return;
-  const saved = await persist('reader',id,{configured:true,name:reader.name || reader.id,role:reader.role || 'start',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))});
+  const saved = await persist('reader',id,{configured:true,port:reader.port,name:reader.name || reader.id,role:reader.role || 'start',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))});
   if (saved) select('reader',saved.id);
 });
 export function updateVenueMap(state={}) {
-  if(state.rooms)rooms=state.rooms;if(state.readers)readers=state.readers;if(state.screens)screens=state.screens;if(state.sessions)sessions=state.sessions;
+  if(state.devices)devices=state.devices;if(state.rooms)rooms=state.rooms;if(state.readers)readers=state.readers;if(state.screens)screens=state.screens;if(state.sessions)sessions=state.sessions;
   connected=state.connected ?? connected;if(!connected && gesture)cancelGesture();
   if(placement && (!canEdit() || placement.type==='reader' && !online('reader',itemFor('reader',placement.id) || {})))cancelPlacement();
   if(!connected){if(readerDialog.open)readerDialog.close();if(nameDialog.open)nameDialog.close();}
@@ -381,8 +405,8 @@ document.addEventListener('click',async e=>{
   cancelPlacement();if(!p || !canEdit())return;
   let patch,id=null;
   if(chosen.type==='reader'){
-    const reader=itemFor('reader',chosen.id);if(!room || !reader || !online('reader',reader))return;id=reader.id;
-    patch={configured:true,name:reader.name || reader.id,role:reader.role || 'start',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))};
+    const reader=itemFor('reader',chosen.id) || chosen.reader;if(!room || !reader || !online('reader',reader))return;id=reader.id;
+    patch={configured:true,port:reader.port,name:reader.name || reader.id,role:reader.role || 'start',roomId:room.id,x:clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)),y:clamp(snap(p.y-room.y),0,Math.max(0,room.height-42))};
   }else if(chosen.type==='room')patch={name:chosen.name,x:clamp(snap(p.x),-10000,10000),y:clamp(snap(p.y),-10000,10000),width:320,height:220};
   else patch={name:chosen.name,roomId:room?.id || null,x:room?clamp(snap(p.x-room.x),0,Math.max(0,room.width-116)):clamp(snap(p.x),-10000,10000),y:room?clamp(snap(p.y-room.y),0,Math.max(0,room.height-42)):clamp(snap(p.y),-10000,10000)};
   const saved=await persist(chosen.type,id,patch);if(saved)select(chosen.type,saved.id);

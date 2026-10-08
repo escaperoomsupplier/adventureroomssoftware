@@ -13,7 +13,7 @@ Configuration and team actions send no commands to physical hardware.
   cancelled sessions, with name search, status filters and 15 per page.
 - **Leaderboard** (`/leaderboard`): completed games ordered by total elapsed time.
 - **Screen settings** (`/screen-settings`): defaults, media and screen automation. Displays open `/screens` to choose their player.
-- **Readers** (`/devices`): readers, selectable details and the latest 15 RFID events.
+- **Readers** (`/devices`): controllers grouped by port, RFID configuration and the latest 15 RFID events.
 
 Pages support direct links and browser Back/Forward. Navigation preserves forms
 and maintains one live SSE connection. Reloading discards unsaved form entries.
@@ -26,7 +26,7 @@ before relying on it. Reconnection refreshes the current view.
    then click the map to place it. Escape or a click outside the map cancels.
 2. Drag its rectangle to move it. Drag any edge to resize. Drag empty space to pan,
    use the mouse wheel to zoom, or press **Fit view** to see the layout.
-3. Choose **Add reader**, select an online reader, then click a room to place and
+3. Choose **Add reader**, select a port under an online controller, then click a room to place and
    assign it. Click outside a room or press Escape to cancel. Select its block to
    give it a friendly name and choose its role.
 4. Move reader blocks within or between rooms. The room inspector lists its readers
@@ -42,10 +42,10 @@ Rooms can occupy negative coordinates, and new rooms begin near `(1000,1000)`.
 Geometry fields are hidden. Keyboard users can Tab to a block and use arrow keys
 to move it; Shift and arrows resize a room. Keyboard focus remains visible.
 
-Green rooms have recent contact from every configured assigned reader; red rooms
-have at least one reader unseen for more than 25 seconds. Grey means no configured
+Green rooms have recent contact from the controllers of every configured assigned reader; red rooms
+have at least one controller unseen for more than 25 seconds. Grey means no configured
 readers or a disabled room. Team markers show their last registered location.
-Neither color nor markers prove physical occupancy or puzzle readiness.
+Neither color nor markers prove RFID sensor presence, physical occupancy or puzzle readiness.
 
 ## Prepare a team and wristbands
 
@@ -85,10 +85,33 @@ ranking result retains the team's history.
 
 ## Diagnostics
 
-Select a reader to inspect its ID, firmware details, last contact and last RFID
-state. The compact event table shows the latest 15 events. Timestamps describe
-receipt at the server, not the precise reading time on the device. Reader names
-help operators identify hardware without hiding its underlying ID.
+The Readers page groups logical RFID readers under their physical UUPC controller.
+Each port has its own name, room and role. Use **Configure as RFID** to configure a
+port, or **Edit** to change an existing reader. Controller details include the
+source device ID, IP address, firmware and controller port count. Port capacity is
+inferred from the serial format documented in the UUPC wiki: a 14-digit numeric
+serial has a production date (`YYYYMMDD`) at positions 1–8 and the port count at
+positions 11–12 (positions are counted from 1). Recognized serials automatically
+provide candidate ports 1 through that count in Readers and the map picker.
+An unrecognized serial leaves capacity unknown; enter the actual port manually
+(1–255). Previously observed port numbers can also appear as candidates.
+
+A port candidate is not evidence that a sensor is connected. Green contact indicators
+mean the controller posted within 25 seconds. They do not verify individual sensors.
+Only configured RFID readers appear as map blocks or in reception and automation
+selectors. Their port labels distinguish readers sharing one controller.
+
+Older reader configurations show **Legacy / port unknown** and remain available
+for pairing and Other automations with older firmware that sends no port number.
+They do not handle events carrying an explicit port number. To migrate a reader,
+select its actual port in the Readers page or map inspector and save; its ID and
+history remain intact.
+The map's Add reader picker groups available ports by online controller. Choosing
+and placing a port configures it only after a valid room click; cancellation does
+not save anything.
+
+The compact event table shows the latest 15 RFID events with source-port context.
+Timestamps describe receipt at the server, not the precise hardware reading time.
 
 ## Simulator without hardware
 
@@ -147,7 +170,7 @@ reset them as shown above: `DISCOVERY=0` disables UDP discovery, and
 
 Enable UDP discovery through the server configuration. The computer and UUPC devices must be reachable on the local network. Allow TCP 4000 and UDP 9811 through the firewall for the application on the trusted private network. Do not forward these ports from the Internet. Multiple network interfaces and Wi-Fi client isolation can restrict broadcasts.
 
-Do not run ERCC alongside this application on the same device network. The firmware retains the first discovered ERCC server address until the UUPC restarts. Switching servers may require a controller restart; restarting only the application will not change the retained address.
+Do not run ERCC alongside this application on the same device network. Receiver switching depends on firmware configuration. Older firmware may retain the first discovered ERCC server address until the UUPC restarts. Newer SW10 firmware can switch receivers. Check the device configuration when changing servers.
 
 HTTP is the permanent transport and UDP is used for discovery. Firmware snapshots
 contain the last RFID state rather than a durable event log. Repeated snapshots

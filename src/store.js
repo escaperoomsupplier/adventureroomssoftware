@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { inferDevicePortCount } from './protocol.js';
 
 // Firmware reports the last RFID value, not a durable event sequence. The first
 // non-null value is therefore a baseline; an initial placement can be missed.
@@ -19,6 +20,11 @@ export class DeviceStore {
         type TEXT NOT NULL, uid TEXT NOT NULL, placed INTEGER NOT NULL,
         received_at TEXT NOT NULL
       );`);
+    if (!this.db.prepare('PRAGMA table_info(events)').all().some(column => column.name === 'port')) {
+      this.db.exec('ALTER TABLE events ADD COLUMN port INTEGER');
+    }
+    this.db.exec(`CREATE TABLE IF NOT EXISTS device_observed_ports(device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      port INTEGER NOT NULL,PRIMARY KEY(device_id,port));`);
   }
 
   recordDiscovery({ id, address, seenAt = new Date().toISOString() }) {
@@ -36,7 +42,7 @@ export class DeviceStore {
     const id = String(snapshot.id);
     const rfid = snapshot.rfid;
     if (rfid != null && (typeof rfid.uid !== 'string' || rfid.uid.length > 128 ||
-        !rfid.uid.length || typeof rfid.placed !== 'boolean')) throw new Error('Invalid RFID value');
+        !rfid.uid.length || typeof rfid.placed !== 'boolean' || (rfid.port != null && (!Number.isInteger(rfid.port) || rfid.port < 1 || rfid.port > 255)))) throw new Error('Invalid RFID value');
     for (const key of ['machineState', 'softwareVersion', 'hardwareVersion']) {
       if (snapshot[key] != null && !['string', 'number'].includes(typeof snapshot[key])) {
         throw new Error(`Invalid ${key}`);
@@ -47,7 +53,7 @@ export class DeviceStore {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const previous = this.#get(id);
-      const lastRfid = rfid == null ? previous?.lastRfid ?? null : { uid: rfid.uid, placed: rfid.placed };
+      const lastRfid = rfid == null ? previous?.lastRfid ?? null : { uid: rfid.uid, placed: rfid.placed, port: rfid.port ?? null };
       this.db.prepare(`INSERT INTO devices(id,address,machine_state,software_version,hardware_version,last_seen_at,last_rfid,snapshot_count)
         VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET
         address=excluded.address,machine_state=excluded.machine_state,software_version=excluded.software_version,
@@ -56,14 +62,15 @@ export class DeviceStore {
         .run(id, address, JSON.stringify(snapshot.machineState ?? null),
           JSON.stringify(snapshot.softwareVersion ?? null), JSON.stringify(snapshot.hardwareVersion ?? null),
           receivedAt, lastRfid ? JSON.stringify(lastRfid) : null);
+      if (rfid?.port != null) this.db.prepare('INSERT OR IGNORE INTO device_observed_ports(device_id,port) VALUES(?,?)').run(id, rfid.port);
       let event = null;
       if (rfid != null && !(rfid.uid === '00000000' && !rfid.placed) && previous?.lastRfid &&
-          (previous.lastRfid.uid !== rfid.uid || previous.lastRfid.placed !== rfid.placed)) {
+          (previous.lastRfid.uid !== rfid.uid || previous.lastRfid.placed !== rfid.placed || previous.lastRfid.port !== (rfid.port ?? null))) {
         const type = rfid.placed ? 'rfid.placed' : 'rfid.removed';
-        const result = this.db.prepare(`INSERT INTO events(device_id,type,uid,placed,received_at) VALUES(?,?,?,?,?)`)
-          .run(id, type, rfid.uid, Number(rfid.placed), receivedAt);
+        const result = this.db.prepare(`INSERT INTO events(device_id,type,uid,placed,received_at,port) VALUES(?,?,?,?,?,?)`)
+          .run(id, type, rfid.uid, Number(rfid.placed), receivedAt, rfid.port ?? null);
         event = { sequence: Number(result.lastInsertRowid), deviceId: id, type,
-          uid: rfid.uid, placed: rfid.placed, receivedAt };
+          uid: rfid.uid, placed: rfid.placed, port: rfid.port ?? null, receivedAt };
       }
       const device = this.#get(id);
       const result = onRecorded?.({ device, event, previous });
@@ -82,7 +89,7 @@ export class DeviceStore {
 
   listEvents(limit = 100) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('Event limit must be 1–1000');
-    return this.db.prepare(`SELECT sequence,device_id AS deviceId,type,uid,placed,received_at AS receivedAt
+    return this.db.prepare(`SELECT sequence,device_id AS deviceId,type,uid,placed,port,received_at AS receivedAt
       FROM events ORDER BY sequence DESC LIMIT ?`).all(limit)
       .map(row => ({ ...row, placed: Boolean(row.placed) }));
   }
@@ -100,9 +107,12 @@ export class DeviceStore {
   }
 
   #device(row) {
+    const storedRfid = JSON.parse(row.last_rfid ?? 'null');
+    const lastRfid = storedRfid ? { ...storedRfid, port: storedRfid.port ?? null } : null;
+    const observedPorts = this.db.prepare('SELECT port FROM device_observed_ports WHERE device_id=? ORDER BY port').all(row.id).map(item => item.port);
     return { id: row.id, address: row.address, machineState: JSON.parse(row.machine_state ?? 'null'),
       softwareVersion: JSON.parse(row.software_version ?? 'null'), hardwareVersion: JSON.parse(row.hardware_version ?? 'null'),
-      lastSeenAt: row.last_seen_at, lastRfid: JSON.parse(row.last_rfid ?? 'null'),
+      lastSeenAt: row.last_seen_at, lastRfid, portCount: inferDevicePortCount(row.id), observedPorts,
       snapshotCount: row.snapshot_count, rfidBaselineEstablished: row.last_rfid !== null };
   }
 }

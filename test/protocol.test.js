@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HELLO_PAYLOAD, parseHeartbeat, parseSnapshot } from '../src/protocol.js';
+import { HELLO_PAYLOAD, parseHeartbeat, parseSnapshot, inferDevicePortCount } from '../src/protocol.js';
 
 const id = '1234567890ABCD';
 const snapshot = () => ({ id, sv: '501', hv: '5', universal_state: { machine_state: '0' }, message: { RFID: 'aabbccdd_1' } });
@@ -17,12 +17,12 @@ test('firmware hello includes the terminating NUL and heartbeat has exact size',
 test('normalizes firmware snapshots without inventing placement events', () => {
   const raw = snapshot();
   const parsed = parseSnapshot(raw);
-  assert.deepEqual(parsed, { id, softwareVersion: '501', hardwareVersion: '5', machineState: 0, rfid: { uid: 'AABBCCDD', placed: true }, raw });
+  assert.deepEqual(parsed, { id, portCount: null, softwareVersion: '501', hardwareVersion: '5', machineState: 0, rfid: { uid: 'AABBCCDD', placed: true, port: null }, raw });
   assert.deepEqual(parseSnapshot(raw), parsed);
   raw.message.RFID = 'AABBCCDD_0';
-  assert.deepEqual(parseSnapshot(raw).rfid, { uid: 'AABBCCDD', placed: false });
+  assert.deepEqual(parseSnapshot(raw).rfid, { uid: 'AABBCCDD', placed: false, port: null });
   raw.message.RFID = '00000000_0';
-  assert.deepEqual(parseSnapshot(raw).rfid, { uid: '00000000', placed: false });
+  assert.deepEqual(parseSnapshot(raw).rfid, { uid: '00000000', placed: false, port: null });
   delete raw.message;
   assert.equal(parseSnapshot(raw).rfid, null);
 });
@@ -33,3 +33,27 @@ test('rejects malformed and expander-only payloads', () => {
   }
 });
 
+
+test('new firmware exposes one-based RFID port without assigning one to legacy reports', () => {
+  for (const port of [1, 3, 32, 255]) {
+    const raw = snapshot(); raw.message.RFID = `aabbccdd_1_${port}`;
+    assert.deepEqual(parseSnapshot(raw).rfid, { uid: 'AABBCCDD', placed: true, port });
+  }
+  for (const value of ['0', '256', '-1', '1.5', '01', '', '1_2', ' 3']) {
+    const raw = snapshot(); raw.message.RFID = `AABBCCDD_1_${value}`;
+    assert.throws(() => parseSnapshot(raw), /RFID/);
+  }
+  assert.equal(inferDevicePortCount('20260211140203'), 2);
+  assert.equal(inferDevicePortCount('unknown'), null);
+});
+
+test('provisioned serial digits eleven and twelve specify port capacity', () => {
+  assert.equal(inferDevicePortCount('20261008120801'), 8);
+  assert.equal(inferDevicePortCount('20261008013299'), 32);
+  assert.equal(inferDevicePortCount('20261008120001'), null);
+  for (const id of ['2026100812080A', '2026100812080', '202610081208011', 20261008120801, null]) {
+    assert.equal(inferDevicePortCount(id), null);
+  }
+  const raw = { ...snapshot(), id: '20261008120801' };
+  assert.equal(parseSnapshot(raw).portCount, 8);
+});

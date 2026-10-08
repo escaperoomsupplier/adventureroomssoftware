@@ -1,6 +1,14 @@
 export const HELLO_PAYLOAD = Buffer.from('Hello_from_ERCC\0', 'ascii');
 const ID = /^[A-Za-z0-9_-]{14}$/;
 
+// Provisioning format: YYYYMMDD + factory code; digits 11–12 encode capacity.
+// A zero capacity or a nonnumeric legacy ID leaves the capacity unknown.
+export function inferDevicePortCount(id) {
+  if (typeof id !== 'string' || !/^\d{14}$/.test(id)) return null;
+  const count = Number(id.slice(10, 12));
+  return count > 0 ? count : null;
+}
+
 export function parseHeartbeat(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length !== 24) return null;
   // UTF-8 prevents high-bit bytes from becoming valid ASCII through truncation.
@@ -26,13 +34,15 @@ export function parseSnapshot(raw) {
   let rfid = null;
   const card = raw.message?.RFID;
   if (card !== undefined && card !== '') {
-    if (typeof card !== 'string' || !/^[0-9a-fA-F]{8}_[01]$/.test(card)) {
+    const match = typeof card === 'string' ? /^([0-9a-fA-F]{8})_([01])(?:_([1-9][0-9]{0,2}))?$/.exec(card) : null;
+    if (!match || (match[3] !== undefined && Number(match[3]) > 255)) {
       throw new TypeError('Invalid RFID state');
     }
-    rfid = { uid: card.slice(0, 8).toUpperCase(), placed: card[9] === '1' };
+    rfid = { uid: match[1].toUpperCase(), placed: match[2] === '1', port: match[3] === undefined ? null : Number(match[3]) };
   }
   return {
     id: raw.id,
+    portCount: inferDevicePortCount(raw.id),
     softwareVersion: version(raw.sv, 'sv'),
     hardwareVersion: version(raw.hv, 'hv'),
     machineState: Number(state),
