@@ -40,15 +40,14 @@ function edit(reader) {
   }
   detail.append(metadata, node('p','Controller contact does not confirm that an RFID sensor is connected to this port.','field-hint'));
   const form = node('form', undefined, 'reader-config-form');
-  const name = field(form,'Reader name',reader.name || `RFID port ${reader.port ?? ''}`); name.required=true; name.maxLength=80;
-  const legacy = reader.id === controllerId(reader), capacity = device.portCount || reader.portCount || 255;
-  const port = field(form,'Controller port',reader.port, legacy ? [['','Legacy / port unknown'], ...Array.from({length:capacity},(_,index)=>[String(index+1),`Port ${index+1}`])] : undefined);
-  if (!legacy) { port.type='number'; port.min='1'; port.max=String(capacity); port.required=true; port.readOnly=true; }
-  else form.append(node('p','Leave Legacy / port unknown selected for older unaddressed firmware. Choose a numbered port only to migrate this reader.','field-hint'));
+  const name = field(form,'Reader name',reader.name || `RFID port ${reader.port}`); name.required=true; name.maxLength=80;
+  const capacity = device.portCount || reader.portCount || 255;
+  const port = field(form,'Controller port',reader.port); port.type='number'; port.min='1'; port.max=String(capacity); port.required=true;
+  port.readOnly=reader.id===`${reader.deviceId}-p${reader.port}`;
   const room = field(form,'Room',reader.roomId || '',[['','Unassigned'],...state.rooms.map(r=>[r.id,r.name])]);
   const role = field(form,'Role',reader.role || 'other',roles);
   const save = node('button',reader.configured ? 'Save' : 'Configure as RFID'); save.type='submit'; form.append(save);
-  form.onsubmit = event => { event.preventDefault(); void write(reader.id,'PATCH',{name:name.value.trim(),port:legacy && port.value==='' ? null : Number(port.value),roomId:room.value || null,role:role.value,configured:true}); };
+  form.onsubmit = event => { event.preventDefault(); void write(reader.id,'PATCH',{name:name.value.trim(),port:Number(port.value),roomId:room.value || null,role:role.value,configured:true}); };
   if (reader.configured) form.append(button('Remove reader', () => {
     const confirmation=node('div',undefined,'reader-confirm'); confirmation.append(node('p','Remove this reader configuration? Recorded history is preserved.'),button('Confirm removal',()=>void write(reader.id,'DELETE')),button('Cancel',()=>confirmation.remove())); form.append(confirmation);
   }));
@@ -71,10 +70,10 @@ function render() {
     status.title='Controller contact only. RFID sensor presence is unknown.';heading.append(node('strong',device.id),status);
     summary.append(heading,node('span',`${device.address || 'Address unknown'} · ${device.portCount ? `${device.portCount} controller ports` : 'Port count unknown'}`,'field-hint'));
     group.append(summary,node('p','Controller contact does not confirm RFID sensor presence.','field-hint'));
-    const rows=state.readers.filter(r=>controllerId(r)===device.id).sort((a,b)=>(a.port ?? Infinity)-(b.port ?? Infinity)); const target=node('div',undefined,'table-wrap');
+    const rows=state.readers.filter(r=>controllerId(r)===device.id).sort((a,b)=>a.port-b.port); const target=node('div',undefined,'table-wrap');
     table(target,['Port','Reader','Room','Role',''],rows.map(reader=>{
       const b=button(reader.configured?'Edit':'Configure as RFID',()=>edit(reader));b.dataset.reader=reader.id;
-      return [reader.port == null ? 'Legacy / port unknown' : String(reader.port),reader.configured?reader.name:'Not configured',state.rooms.find(r=>r.id===reader.roomId)?.name || '—',reader.configured?(roles.find(([id])=>id===reader.role)?.[1] || '—'):'—',b];
+      return [String(reader.port),reader.configured?reader.name:'Not configured',state.rooms.find(r=>r.id===reader.roomId)?.name || '—',reader.configured?(roles.find(([id])=>id===reader.role)?.[1] || '—'):'—',b];
     }),'No configured ports. Add a port manually below.'); group.append(target);
     if(!device.portCount) {
       const form=node('form',undefined,'reader-manual-port');const input=field(form,'Port number','');input.type='number';input.min='1';input.max='255';input.required=true;

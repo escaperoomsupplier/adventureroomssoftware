@@ -67,7 +67,8 @@ RFID port independently with its own name, room and role. For the 14-digit numer
 serial format documented in the UUPC wiki, positions 1–8 contain the production
 date (`YYYYMMDD`) and positions 11–12 contain the port count. Recognized serials
 automatically expose port choices; unrecognized serials allow manual port entry.
-Controller contact does not prove sensor presence.
+RFID messages must include a numbered source port; unaddressed RFID messages are
+not supported. Controller contact does not prove sensor presence.
 
 The operator interface is also available at [localhost:4000](http://localhost:4000).
 On another display, open `http://SERVER-LAN-IP:4000/screens`, choose a screen and

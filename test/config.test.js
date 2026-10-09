@@ -39,7 +39,7 @@ test('offline JSON overrides projection and preserves unknown hardware without c
   const { config, rooms, venue, write } = setup(t);
   config.initialize();
   write('rooms', { schemaVersion: 1, items: [{ id: 'room-a', name: 'Imported', x: -50, y: 75, width: 240, height: 160 }] });
-  write('readers', { schemaVersion: 1, items: [{ id: 'ROOM_DEVICE_01', name: 'Offline', configured: true, roomId: 'room-a', x: 20, y: 20, role: 'exit' }] });
+  write('readers', { schemaVersion: 1, items: [{ id: 'ROOM_DEVICE_01', deviceId:'ROOM_DEVICE_01', port:1, name: 'Offline', configured: true, roomId: 'room-a', x: 20, y: 20, role: 'exit' }] });
   config.initialize();
   assert.equal(rooms.getRoom('room-a').x, -50);
   assert.equal(venue.listReaders()[0].lastRfid, null);

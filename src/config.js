@@ -137,8 +137,8 @@ export class PortableConfig {
     }
     const mappings = new Set();
     for (const reader of bundle.readers.items) {
-      const deviceId = reader.deviceId ?? reader.id;
-      const port = reader.port ?? null;
+      const deviceId = reader.deviceId;
+      const port = reader.port;
       const canonical = /^([A-Za-z0-9_-]{14})-p([1-9][0-9]*)$/.exec(reader.id);
       if (canonical && (canonical[1] !== deviceId || Number(canonical[2]) !== port)) invalid('Canonical reader ID must match its controller and port.');
       if (/^[A-Za-z0-9_-]{14}$/.test(reader.id) && reader.id !== deviceId) invalid('Controller-shaped reader ID must match its controller.');
@@ -146,7 +146,7 @@ export class PortableConfig {
       if (mappings.has(key)) invalid('Duplicate controller port.');
       mappings.add(key);
       const portCount = inferDevicePortCount(deviceId);
-      if (port !== null && (!Number.isInteger(port) || port < 1 || port > (portCount ?? 255))) invalid('Invalid reader port.');
+      if (!Number.isInteger(port) || port < 1 || port > (portCount ?? 255)) invalid('Invalid reader port.');
       if (!/^[A-Za-z0-9_-]{14}$/.test(deviceId) || typeof reader.name !== 'string' || !reader.name.trim() || reader.name.trim().length > 80 ||
           typeof reader.configured !== 'boolean' || !['entry', 'start', 'stop', 'finish', 'exit', 'pairing', 'other'].includes(reader.role) ||
           !Number.isInteger(reader.x) || reader.x < 0 || reader.x > 10000 || !Number.isInteger(reader.y) || reader.y < 0 || reader.y > 10000) invalid('Invalid reader configuration.');

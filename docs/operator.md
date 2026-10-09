@@ -101,11 +101,9 @@ mean the controller posted within 25 seconds. They do not verify individual sens
 Only configured RFID readers appear as map blocks or in reception and automation
 selectors. Their port labels distinguish readers sharing one controller.
 
-Older reader configurations show **Legacy / port unknown** and remain available
-for pairing and Other automations with older firmware that sends no port number.
-They do not handle events carrying an explicit port number. To migrate a reader,
-select its actual port in the Readers page or map inspector and save; its ID and
-history remain intact.
+Every RFID reader has an explicit numbered controller port. RFID messages without
+a port number are not supported. Use firmware that includes the source port in
+each RFID message. Reader names, roles and rooms are independent for each port.
 The map's Add reader picker groups available ports by online controller. Choosing
 and placing a port configures it only after a valid room click; cancellation does
 not save anything.
@@ -140,7 +138,7 @@ node scripts/simulate-upc.js http://127.0.0.1:14000
 npm run simulate
 ```
 
-Node.js 24.11 or newer is required. The simulator accepts loopback destinations only and sends four full firmware-shaped packets to `POST /`: baseline `00000000_0`, placement `12AB34CD_1`, an identical snapshot, and removal `12AB34CD_0`. Its device ID is `SIMULATOR00001` (14 characters). Expect two new RFID events; the repeated snapshot is not a new placement. The simulator does not test UDP, discover devices or control hardware. The data is synthetic; do not use real wristband identifiers in examples committed to Git.
+Node.js 24.11 or newer is required. The simulator accepts loopback destinations only and sends four full firmware-shaped packets to `POST /`: baseline `00000000_0_1`, placement `12AB34CD_1_1`, an identical snapshot, and removal `12AB34CD_0_1`. Its device ID is `SIMULATOR00001` (14 characters). Expect two new RFID events; the repeated snapshot is not a new placement. The simulator does not test UDP, discover devices or control hardware. The data is synthetic; do not use real wristband identifiers in examples committed to Git.
 
 To exercise the UI, run the simulator once to discover its controller, then configure
 it as a named reader on Overview. Create a pending team, assign its synthetic UID
@@ -190,7 +188,7 @@ The default `config` directory holds authoritative version-1 JSON configuration,
 local media, `state/runtime.sqlite` and backups. `CONFIG_DIR` selects another
 configuration directory. Stop the application before copying the complete directory
 to another machine. Invalid configuration stops startup with an error while
-preserving data; legacy data is migrated automatically. Environment variables for
+preserving data. Environment variables for
 `PORT`, `HOST` and `DISCOVERY` override saved settings for the current run.
 
 ## Remove venue items

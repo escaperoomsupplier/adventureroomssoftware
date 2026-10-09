@@ -5,7 +5,7 @@ import { CaptureStore } from '../src/captures.js';
 function fixture() {
   let now = Date.parse('2026-09-24T10:00:00Z');
   const captures = new CaptureStore({ now: () => now });
-  const reader = { id: '0123456789ABCD', configured: true, rfidBaselineEstablished: true, lastSeenAt: new Date(now).toISOString(), lastRfid: { uid: 'AABBCCDD', placed: true } };
+  const reader = { id: '0123456789ABCD-p1', deviceId:'0123456789ABCD', port:1, configured: true, rfidBaselineEstablished: true, lastSeenAt: new Date(now).toISOString(), lastRfid: { uid: 'AABBCCDD', placed: true, port:1 } };
   return { captures, reader, advance: ms => { now += ms; } };
 }
 
@@ -14,15 +14,15 @@ test('capture waits for a new placement from its selected reader and completes o
   const request = captures.start(reader);
   assert.equal(request.uid, null);
   assert.throws(() => captures.start(reader), { status: 409 });
-  const data = { device: reader, previous: reader, event: null };
+  const data = { device: {id:reader.deviceId}, readerId:reader.id, previous:reader, event:null };
   assert.equal(captures.match(data), null);
   assert.equal(captures.match({ ...data, event: { type: 'rfid.removed' } }), null);
-  assert.equal(captures.match({ ...data, device: { id: 'OTHER000000000' }, event: { type: 'rfid.placed' } }), null);
-  const matching = captures.match({ ...data, event: { type: 'rfid.placed', uid: '11223344' } });
+  assert.equal(captures.match({ ...data, device: { id: 'OTHER000000000' }, event: { type: 'rfid.placed', port:1 } }), null);
+  const matching = captures.match({ ...data, event: { type: 'rfid.placed', port:1, uid: '11223344' } });
   assert.equal(captures.get(request.id).status, 'waiting');
   captures.complete(matching, '11223344');
   assert.equal(captures.get(request.id).uid, '11223344');
-  assert.equal(captures.match({ ...data, event: { type: 'rfid.placed' } }), null);
+  assert.equal(captures.match({ ...data, event: { type: 'rfid.placed', port:1 } }), null);
 });
 
 test('capture cancellation, timeout and reader removal never assign a stale card', () => {

@@ -104,7 +104,7 @@ export async function startServer({
     if (pairing) {
       const reader = venue.listReaders().find(item => item.id === pairing.readerId);
       const team = reception.listSessions().find(item => item.id === pairing.sessionId);
-      if (!reader?.configured || reader.role !== 'pairing' || (reader.deviceId ?? reader.id) !== pairing.deviceId || (reader.port ?? null) !== pairing.port || !['pending','active'].includes(team?.status)) pairing = null;
+      if (!reader?.configured || reader.role !== 'pairing' || reader.deviceId !== pairing.deviceId || reader.port !== pairing.port || !['pending','active'].includes(team?.status)) pairing = null;
     }
     return pairing;
   };
@@ -312,7 +312,7 @@ export async function startServer({
           if (!reader?.configured || reader.role !== 'pairing' || Date.now()-Date.parse(reader.lastSeenAt)>25000) return json(res, 409, {error:'Choose an online Card assignment reader.'});
           const team = reception.getSession(body.sessionId);
           if (!['pending','active'].includes(team.status)) return json(res, 409, {error:'Choose a current team.'});
-          pairing = {readerId:reader.id,deviceId:reader.deviceId ?? reader.id,port:reader.port ?? null,sessionId:team.id,lastUid:null,error:null};
+          pairing = {readerId:reader.id,deviceId:reader.deviceId,port:reader.port,sessionId:team.id,lastUid:null,error:null};
           publishOperators(); return json(res, 200, {pairing});
         }
       }
@@ -382,7 +382,7 @@ export async function startServer({
         catch { return json(res, 400, { error: 'Invalid UUPC snapshot' }); }
         const readersBeforeSnapshot = venue.listReaders();
         captures.sweep(readersBeforeSnapshot);
-        const sourceReader = readersBeforeSnapshot.find(reader => reader.configured && (reader.deviceId ?? reader.id) === snapshot.id && (reader.port ?? null) === (snapshot.rfid?.port ?? null));
+        const sourceReader = readersBeforeSnapshot.find(reader => reader.configured && reader.deviceId === snapshot.id && reader.port === snapshot.rfid?.port);
         const captureBaselineReady = sourceReader?.rfidBaselineEstablished === true;
         let capture = null, pairingUpdate = null;
         const currentPairing = pairingState();

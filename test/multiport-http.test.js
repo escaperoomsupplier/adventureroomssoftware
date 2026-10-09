@@ -11,7 +11,7 @@ async function fixture(t) {
     const response = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return { status: response.status, data: await response.json() };
   }
-  const tap = (uid, port, placed = true) => request('/', { id: deviceId, universal_state: { machine_state: '0' }, message: { RFID: `${uid}_${Number(placed)}${port === null ? '' : `_${port}`}` } });
+  const tap = (uid, port, placed = true) => request('/', { id: deviceId, universal_state: { machine_state: '0' }, message: { RFID: `${uid}_${Number(placed)}_${port}` } });
   const configure = async (port, values) => {
     const result = await request(`/api/readers/${deviceId}-p${port}`, { configured: true, ...values }, 'PATCH');
     assert.equal(result.status, 200, JSON.stringify(result.data));
@@ -57,11 +57,9 @@ test('one controller routes room start, stop and Other automation to distinct lo
   assert.equal((await request('/api/readers', undefined, 'GET')).data.filter(reader => reader.configured).length, 4);
 });
 
-test('pairing and one-shot capture accept only the selected controller port and remapping cancels them', async t => {
+test('pairing and one-shot capture accept only the selected controller port and disabling the reader cancels them', async t => {
   const { app, request, tap, configure } = await fixture(t);
-  const configured = await request(`/api/readers/${deviceId}`, { configured: true, port: 1, name: 'Hall assignment', role: 'pairing' }, 'PATCH');
-  assert.equal(configured.status, 200);
-  const pairingReader = configured.data.reader;
+  const pairingReader = await configure(1, {name:'Hall assignment',role:'pairing'});
   await configure(2, { name: 'Other assignment', role: 'pairing' });
   const session = app.reception.createSession({ name: 'Wristbands' });
   assert.equal((await request('/api/pairing', { readerId: pairingReader.id, sessionId: session.id })).status, 200);
@@ -78,25 +76,22 @@ test('pairing and one-shot capture accept only the selected controller port and 
   assert.equal(app.captures.get(armed.data.capture.id).uid, '55667788');
   const pending = await request(`/api/readers/${pairingReader.id}/capture`, {});
   await request('/api/pairing', { readerId: pairingReader.id, sessionId: session.id });
-  assert.equal((await request(`/api/readers/${pairingReader.id}`, { port: 3 }, 'PATCH')).status, 200);
+  assert.equal((await request(`/api/readers/${pairingReader.id}`, { configured: false }, 'PATCH')).status, 200);
   assert.equal(app.captures.get(pending.data.capture.id).status, 'cancelled');
   assert.equal((await request('/api/pairing', undefined, 'GET')).data.pairing, null);
   await tap('12345678', 3);
   assert.deepEqual(app.reception.getSession(session.id).cards, ['AABBCCDD']);
 });
 
-test('legacy reader does not receive numbered-port events and explicit migration preserves its identity', async t => {
-  const { app, request, tap } = await fixture(t);
-  const room = app.rooms.createRoom({ name: 'Legacy room' });
-  assert.equal((await request(`/api/readers/${deviceId}`, { configured: true, role: 'start', roomId: room.id }, 'PATCH')).status, 200);
-  const session = app.reception.createSession({ name: 'Legacy team' });
-  app.reception.assignCard(session.id, 'AABBCCDD');
-  await tap('00000000', null, false);
-  await tap('AABBCCDD', 2);
-  assert.equal(app.reception.getSession(session.id).roomTimes.length, 0);
-  const migrated = await request(`/api/readers/${deviceId}`, { port: 2 }, 'PATCH');
-  assert.equal(migrated.status, 200); assert.equal(migrated.data.reader.id, deviceId);
-  await tap('AABBCCDD', 2, false); await tap('AABBCCDD', 2);
-  assert.equal(app.reception.getSession(session.id).currentRoomId, room.id);
-  assert.equal((await request(`/api/readers/${deviceId}-p2`, { configured: true }, 'PATCH')).status, 409);
+test('unaddressed RFID messages are rejected without recording a card or changing timing', async t => {
+  const { app, request, configure } = await fixture(t);
+  await configure(1, {role:'pairing'});
+  const session = app.reception.createSession({name:'Port required'});
+  await request('/api/pairing', {readerId:`${deviceId}-p1`,sessionId:session.id});
+  for (const RFID of ['00000000_0','AABBCCDD_1','AABBCCDD_0']) {
+    assert.equal((await request('/',{id:deviceId,universal_state:{machine_state:'0'},message:{RFID}})).status,400);
+  }
+  assert.deepEqual(app.reception.getSession(session.id).cards,[]);
+  assert.deepEqual(app.store.listEvents(),[]);
+  assert.equal((await request(`/api/readers/${deviceId}-p1`,{port:null},'PATCH')).status,400);
 });

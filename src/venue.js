@@ -9,7 +9,7 @@ export class VenueStore {
     this.db = db;
     this.now = now;
     this.reception = new ReceptionStore(db, { now });
-    db.exec(`CREATE TABLE IF NOT EXISTS reader_settings(device_id TEXT PRIMARY KEY REFERENCES devices(id),
+    db.exec(`CREATE TABLE IF NOT EXISTS reader_settings(reader_id TEXT PRIMARY KEY,device_id TEXT NOT NULL REFERENCES devices(id),port INTEGER NOT NULL CHECK(port BETWEEN 1 AND 255),
       name TEXT NOT NULL,configured INTEGER NOT NULL,room_id TEXT REFERENCES rooms(id),x INTEGER NOT NULL,y INTEGER NOT NULL,role TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS venue_migrations(name TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS venue_processed_events(sequence INTEGER PRIMARY KEY);
@@ -18,27 +18,12 @@ export class VenueStore {
       CREATE INDEX IF NOT EXISTS team_visits_session ON team_visits(session_id);
       CREATE TEMP TABLE IF NOT EXISTS venue_observed_devices(device_id TEXT PRIMARY KEY);
       DELETE FROM venue_observed_devices;`);
-    if (!db.prepare('PRAGMA table_info(reader_settings)').all().some(c => c.name === 'reader_id')) {
-      db.exec(`SAVEPOINT reader_mapping;
-        ALTER TABLE reader_settings RENAME TO reader_settings_legacy;
-        CREATE TABLE reader_settings(reader_id TEXT PRIMARY KEY,device_id TEXT NOT NULL REFERENCES devices(id),port INTEGER,
-          name TEXT NOT NULL,configured INTEGER NOT NULL,room_id TEXT REFERENCES rooms(id),x INTEGER NOT NULL,y INTEGER NOT NULL,role TEXT NOT NULL);
-        INSERT INTO reader_settings SELECT device_id,device_id,NULL,name,configured,room_id,x,y,role FROM reader_settings_legacy;
-        DROP TABLE reader_settings_legacy; RELEASE reader_mapping;`);
-    }
-    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS reader_device_port ON reader_settings(device_id,COALESCE(port,-1))');
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS reader_device_port ON reader_settings(device_id,port)');
     const columns = new Set(db.prepare('PRAGMA table_info(team_visits)').all().map(c => c.name));
     if (!columns.has('exited_at')) db.exec('ALTER TABLE team_visits ADD COLUMN exited_at INTEGER');
     if (!columns.has('exit_reason')) db.exec('ALTER TABLE team_visits ADD COLUMN exit_reason TEXT');
     db.exec(`CREATE TABLE IF NOT EXISTS venue_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,
       type TEXT NOT NULL,session_id TEXT NOT NULL,room_id TEXT NOT NULL,occurred_at INTEGER NOT NULL,source TEXT NOT NULL);`);
-    this.#atomic(() => {
-      if (!db.prepare("SELECT name FROM venue_migrations WHERE name='legacy_rooms'").get()) {
-        db.exec(`INSERT OR IGNORE INTO reader_settings(reader_id,device_id,port,name,configured,room_id,x,y,role)
-          SELECT device_id,device_id,NULL,device_id,1,id,20,20,'entry' FROM rooms WHERE device_id IS NOT NULL;
-          INSERT INTO venue_migrations(name) VALUES('legacy_rooms');`);
-      }
-    });
     db.exec("UPDATE reader_settings SET role=CASE role WHEN 'entry' THEN 'start' WHEN 'finish' THEN 'stop' WHEN 'exit' THEN 'stop' ELSE role END");
   }
 
@@ -63,11 +48,8 @@ export class VenueStore {
         for (const port of [...observedPorts].sort((a,b) => a-b)) if (!mappings.some(s => s.port === port))
           mappings.push({ reader_id: `${row.id}-p${port}`, port });
       }
-      if (!mappings.some(s => s.port === null || s.reader_id === row.id) &&
-          ((!portCount && observedPorts.size === 0) || (device.lastRfid !== null && device.lastRfid.port == null)))
-        mappings.push({ reader_id: row.id, port: null });
       return mappings.map(s => ({ ...device, id: s.reader_id, deviceId: row.id, port: s.port, portCount,
-        name: s.name ?? (s.port === null ? row.id : `${row.id} / port ${s.port}`), configured: Boolean(s.configured),
+        name: s.name ?? `${row.id} / port ${s.port}`, configured: Boolean(s.configured),
         roomId: s.room_id ?? null, x: s.x ?? 20, y: s.y ?? 20, role: s.role ?? 'start' }));
     });
   }
@@ -77,7 +59,7 @@ export class VenueStore {
       const reader = this.listReaders().find(item => item.id === id);
       if (!reader || !this.db.prepare('SELECT reader_id FROM reader_settings WHERE reader_id=?').get(id)) fail(404, 'Reader configuration not found.');
       this.db.prepare('DELETE FROM reader_settings WHERE reader_id=?').run(id);
-      if (reader.port === null || id === reader.deviceId) this.db.prepare('UPDATE rooms SET device_id=NULL WHERE device_id=?').run(reader.deviceId);
+      if (!this.db.prepare('SELECT reader_id FROM reader_settings WHERE device_id=?').get(reader.deviceId)) this.db.prepare('UPDATE rooms SET device_id=NULL WHERE device_id=?').run(reader.deviceId);
       return { id, status: 'removed' };
     });
   }
@@ -88,14 +70,14 @@ export class VenueStore {
       let reader = this.listReaders().find(item => item.id === id);
       if (!reader) {
         const match = /^([A-Za-z0-9_-]{14})-p([1-9][0-9]*)$/.exec(id);
-        const base = match && this.listReaders().find(item => item.deviceId === match[1]);
-        if (base) reader = { ...base, id, port: Number(match[2]), name: `${base.deviceId} / port ${match[2]}`, configured: false, roomId: null };
+        const base = match && this.db.prepare('SELECT id FROM devices WHERE id=?').get(match[1]);
+        if (base) reader = { id, deviceId: base.id, portCount: inferDevicePortCount(base.id), port: Number(match[2]), name: `${base.id} / port ${match[2]}`, configured: false, roomId: null, x:20,y:20,role:'start' };
       }
       if (!reader) fail(404, 'Reader not found.');
       const values = { ...reader, ...input };
-      if (id !== reader.deviceId && values.port !== reader.port) fail(400, 'Create a separate logical reader to use another port.');
+      if (/^[A-Za-z0-9_-]{14}-p[1-9][0-9]*$/.test(id) && values.port !== reader.port) fail(400, 'Create a separate logical reader to use another port.');
       if (values.deviceId !== reader.deviceId) fail(400, 'Reader controller cannot be changed.');
-      if (values.port !== null && (!Number.isInteger(values.port) || values.port < 1 || values.port > (reader.portCount ?? 255))) fail(400, 'Invalid reader port.');
+      if (!Number.isInteger(values.port) || values.port < 1 || values.port > (reader.portCount ?? 255)) fail(400, 'Invalid reader port.');
       if (this.db.prepare('SELECT reader_id FROM reader_settings WHERE device_id=? AND port IS ? AND reader_id<>?').get(reader.deviceId, values.port, id)) fail(409, 'Controller port already assigned.');
       if (typeof values.name !== 'string' || !values.name.trim() || values.name.trim().length > 80) fail(400, 'Reader name must contain 1 to 80 characters.');
       if (typeof values.configured !== 'boolean') fail(400, 'Configured must be a boolean.');
@@ -122,11 +104,11 @@ export class VenueStore {
       const baseline = !this.db.prepare('SELECT device_id FROM venue_observed_devices WHERE device_id=?').get(device.id) ||
         !previous || this.now() - Date.parse(previous.lastSeenAt) > 25000;
       this.db.prepare('INSERT OR IGNORE INTO venue_observed_devices(device_id) VALUES(?)').run(device.id);
-      if (!event || event.type !== 'rfid.placed' || !event.placed) return changed;
+      if (!event || event.type !== 'rfid.placed' || !event.placed || !Number.isInteger(event.port)) return changed;
       if (this.db.prepare('SELECT sequence FROM venue_processed_events WHERE sequence=?').get(event.sequence)) return changed;
       this.db.prepare('INSERT INTO venue_processed_events(sequence) VALUES(?)').run(event.sequence);
       if (baseline) return changed;
-      const reader = this.db.prepare('SELECT * FROM reader_settings WHERE device_id=? AND port IS ? AND configured=1').get(device.id, event.port ?? null);
+      const reader = this.db.prepare('SELECT * FROM reader_settings WHERE device_id=? AND port IS ? AND configured=1').get(device.id, event.port);
       if (!reader) return changed;
       const room = reader.room_id ? this.db.prepare('SELECT * FROM rooms WHERE id=?').get(reader.room_id) : null;
       if (reader.room_id && !room) return changed;

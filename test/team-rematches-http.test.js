@@ -4,23 +4,23 @@ import {startServer} from '../src/server.js';
 async function fixture(t){
  const app=await startServer({host:'127.0.0.1',port:0,discovery:false,databasePath:':memory:',logger:{error(){}}});t.after(()=>app.close());const url=`http://127.0.0.1:${app.address.port}`;
  async function request(path,body,method='POST'){const res=await fetch(url+path,{method,headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});return{...await res.json(),status:res.status};}
- async function tap(id,uid,placed=true){return request('/',{id,universal_state:{machine_state:'0'},message:{RFID:`${uid}_${Number(placed)}`}});}
+ async function tap(id,uid,placed=true){return request('/',{id,universal_state:{machine_state:'0'},message:{RFID:`${uid}_${Number(placed)}_1`}});}
  return{app,url,request,tap};
 }
 test('UDP-only pairing reader arms and assigns its first HTTP card once, without replaying an old card',async t=>{
  const {app,request,tap}=await fixture(t),id='PAIR_READER_01';
  app.store.recordDiscovery({id,address:'127.0.0.1'});
- assert.equal((await request(`/api/readers/${id}`,{configured:true,role:'pairing'},'PATCH')).status,200);
+ assert.equal((await request(`/api/readers/${id}-p1`,{configured:true,role:'pairing'},'PATCH')).status,200);
  const {session}=await request('/api/reception/sessions',{name:'Hall team'});
  assert.equal(app.venue.listReaders()[0].rfidBaselineEstablished,false);
- assert.equal((await request('/api/pairing',{readerId:id,sessionId:session.id})).status,200);
+ assert.equal((await request('/api/pairing',{readerId:`${id}-p1`,sessionId:session.id})).status,200);
  const sync=app.screens.syncEvents;app.screens.syncEvents=()=>{throw Error('Injected failure');};
  assert.equal((await tap(id,'AABBCCDD')).status,500);assert.deepEqual(app.reception.getSession(session.id).cards,[]);
  app.screens.syncEvents=sync;
  assert.equal((await tap(id,'AABBCCDD')).status,200);assert.deepEqual(app.reception.getSession(session.id).cards,['AABBCCDD']);
  await tap(id,'AABBCCDD');assert.equal(app.reception.getSession(session.id).cards.length,1);
  await request('/api/pairing',undefined,'DELETE');const {session:second}=await request('/api/reception/sessions',{name:'Next team'});
- await request('/api/pairing',{readerId:id,sessionId:second.id});await tap(id,'AABBCCDD');assert.deepEqual(app.reception.getSession(second.id).cards,[]);
+ await request('/api/pairing',{readerId:`${id}-p1`,sessionId:second.id});await tap(id,'AABBCCDD');assert.deepEqual(app.reception.getSession(second.id).cards,[]);
  await tap(id,'12345678');assert.deepEqual(app.reception.getSession(second.id).cards,['12345678']);
 });
 test('returning team keeps or atomically replaces published result with explicit choice',async t=>{
@@ -44,14 +44,14 @@ test('returning team keeps or atomically replaces published result with explicit
 });
 test('Other reader fires only its own automation and protects referenced reader configuration',async t=>{
  const {app,request,tap}=await fixture(t),id='OTHER_READER01';
- await tap(id,'00000000',false);await request(`/api/readers/${id}`,{configured:true,role:'other'},'PATCH');
+ await tap(id,'00000000',false);await request(`/api/readers/${id}-p1`,{configured:true,role:'other'},'PATCH');
  const {session}=await request('/api/reception/sessions',{name:'Visitors'});await request(`/api/reception/sessions/${session.id}/cards`,{uid:'AABBCCDD'});
  const {screen}=await request('/api/screens',{name:'Wall'});
  app.screens.addMedia({id:'image',name:'Image',kind:'image',mimeType:'image/png',sizeBytes:1,path:'media/images/image.png'});
- const {rule,status}=await request('/api/screen-rules',{name:'Extra effect',trigger:'reader.used',readerId:id,roomId:null,screenId:screen.id,action:{type:'image',mediaId:'image',durationSeconds:10,volume:0}});assert.equal(status,201);
+ const {rule,status}=await request('/api/screen-rules',{name:'Extra effect',trigger:'reader.used',readerId:`${id}-p1`,roomId:null,screenId:screen.id,action:{type:'image',mediaId:'image',durationSeconds:10,volume:0}});assert.equal(status,201);
  await tap(id,'AABBCCDD');const first=app.screens.screenState(screen.id).playback;assert.ok(first);assert.equal(app.reception.getSession(session.id).status,'pending');assert.deepEqual(app.reception.getSession(session.id).roomTimes,[]);
  await tap(id,'AABBCCDD');assert.equal(app.screens.screenState(screen.id).playback.id,first.id);
  await tap(id,'AABBCCDD',false);await tap(id,'AABBCCDD');assert.notEqual(app.screens.screenState(screen.id).playback.id,first.id);
- assert.equal((await request(`/api/readers/${id}`,undefined,'DELETE')).status,409);assert.equal((await request(`/api/readers/${id}`,{role:'start'},'PATCH')).status,409);
- assert.equal((await request(`/api/screen-rules/${rule.id}`,undefined,'DELETE')).status,200);assert.equal((await request(`/api/readers/${id}`,undefined,'DELETE')).status,200);
+ assert.equal((await request(`/api/readers/${id}-p1`,undefined,'DELETE')).status,409);assert.equal((await request(`/api/readers/${id}-p1`,{role:'start'},'PATCH')).status,409);
+ assert.equal((await request(`/api/screen-rules/${rule.id}`,undefined,'DELETE')).status,200);assert.equal((await request(`/api/readers/${id}-p1`,undefined,'DELETE')).status,200);
 });

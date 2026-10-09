@@ -33,7 +33,7 @@ function firmwarePost(port, body) {
 
 test('accepts exact firmware HTTP/1.0, commits and deduplicates RFID snapshots', async t => {
   const { app, url } = await fixture(t);
-  for (const card of ['00000000_0', 'AABBCCDD_1', 'AABBCCDD_1', 'AABBCCDD_0', 'AABBCCDD_1']) {
+  for (const card of ['00000000_0_1', 'AABBCCDD_1_1', 'AABBCCDD_1_1', 'AABBCCDD_0_1', 'AABBCCDD_1_1']) {
     const response = await firmwarePost(app.address.port, JSON.stringify(payload(card)));
     assert.match(response, /^HTTP\/1\.1 200 OK/);
   }
@@ -51,8 +51,8 @@ test('rejects malformed, browser-origin and oversized writes without inserting d
     ['{', {}, 400],
     ['{}', {}, 400],
     [JSON.stringify(payload('broken')), {}, 400],
-    [JSON.stringify(payload('AABBCCDD_1')), { Origin: 'https://example.invalid' }, 403],
-    [JSON.stringify(payload('AABBCCDD_1')), { 'Content-Type': 'text/plain' }, 415],
+    [JSON.stringify(payload('AABBCCDD_1_1')), { Origin: 'https://example.invalid' }, 403],
+    [JSON.stringify(payload('AABBCCDD_1_1')), { 'Content-Type': 'text/plain' }, 415],
     [JSON.stringify({ text: 'x'.repeat(17000) }), {}, 413],
   ];
   for (const [body, headers, status] of cases) {
@@ -96,23 +96,23 @@ async function write(url, path, body = {}, method = 'POST', headers = {}) {
     ...(method === 'DELETE' ? {} : { body: JSON.stringify(body) }) });
 }
 async function prepareVenue(app, url) {
-  await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0_1')));
   const { room } = await (await write(url, '/api/rooms', { name: 'Library' })).json();
   const { session } = await (await write(url, '/api/reception/sessions', { name: 'Team One', durationMinutes: 60 })).json();
   await write(url, `/api/reception/sessions/${session.id}/cards`, { uid: 'AABBCCDD' });
-  await write(url, `/api/readers/${id}`, { name: 'Start gate', configured: true, roomId: room.id, role: 'start' }, 'PATCH');
+  await write(url, `/api/readers/${id}-p1`, { name: 'Start gate', configured: true, roomId: room.id, role: 'start' }, 'PATCH');
   return { room, session };
 }
 
 test('first room reader transitions require explicit Save and preserve history after removing ranking', async t => {
   const {app,url}=await fixture(t);const {room,session}=await prepareVenue(app,url);
-  await firmwarePost(app.address.port,JSON.stringify(payload('AABBCCDD_1')));
+  await firmwarePost(app.address.port,JSON.stringify(payload('AABBCCDD_1_1')));
   assert.equal(app.reception.getSession(session.id).status,'active');
   assert.equal((await write(url,`/api/reception/sessions/${session.id}/end`)).status,409);
   const secondId='0123456789ABCE';
-  await firmwarePost(app.address.port,JSON.stringify({...payload('00000000_0'),id:secondId}));
-  await write(url,`/api/readers/${secondId}`,{configured:true,roomId:room.id,role:'stop'},'PATCH');
-  await firmwarePost(app.address.port,JSON.stringify({...payload('AABBCCDD_1'),id:secondId}));
+  await firmwarePost(app.address.port,JSON.stringify({...payload('00000000_0_1'),id:secondId}));
+  await write(url,`/api/readers/${secondId}-p1`,{configured:true,roomId:room.id,role:'stop'},'PATCH');
+  await firmwarePost(app.address.port,JSON.stringify({...payload('AABBCCDD_1_1'),id:secondId}));
   assert.equal(app.reception.getSession(session.id).status,'active');assert.equal(app.reception.getSession(session.id).currentRoomId,null);
   assert.deepEqual(await(await fetch(url+'/api/leaderboard')).json(),[]);
   assert.equal((await write(url,`/api/reception/sessions/${session.id}/end`)).status,200);
@@ -126,41 +126,41 @@ test('first room reader transitions require explicit Save and preserve history a
 test('explicit card capture suppresses gameplay, completes only after commit and rolls back on storage failure', async t => {
   const { app, url } = await fixture(t);
   const { session } = await prepareVenue(app, url);
-  const response = await write(url, `/api/readers/${id}/capture`);
+  const response = await write(url, `/api/readers/${id}-p1/capture`);
   assert.equal(response.status, 201);
   const { capture } = await response.json();
   assert.equal(capture.status, 'waiting');
-  assert.equal((await write(url, `/api/readers/${id}/capture`)).status, 409);
+  assert.equal((await write(url, `/api/readers/${id}-p1/capture`)).status, 409);
   const before = app.store.listDevices();
   const original = app.venue.applySnapshot;
   app.venue.applySnapshot = function(data) { original.call(this, data); throw new Error('Storage failure'); };
-  assert.match(await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1'))), /500 Internal Server Error/);
+  assert.match(await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1_1'))), /500 Internal Server Error/);
   assert.deepEqual(app.store.listDevices(), before);
   assert.deepEqual(app.store.listEvents(), []);
   assert.equal((await (await fetch(`${url}/api/captures/${capture.id}`)).json()).capture.status, 'waiting');
   app.venue.applySnapshot = original;
-  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1_1')));
   const captured = (await (await fetch(`${url}/api/captures/${capture.id}`)).json()).capture;
   assert.equal(captured.status, 'captured'); assert.equal(captured.uid, 'AABBCCDD');
   assert.equal(app.reception.getSession(session.id).status, 'pending');
   assert.deepEqual(app.venue.getHistory(session.id), []);
-  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1_1')));
   assert.equal(app.reception.getSession(session.id).status, 'pending');
-  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_0')));
-  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_0_1')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1_1')));
   assert.equal(app.reception.getSession(session.id).status, 'active');
 });
 
 test('capture requires configured baseline reader and supports cancellation and expiration', async t => {
   const { app, url } = await fixture(t);
-  await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0')));
-  assert.equal((await write(url, `/api/readers/${id}/capture`)).status, 409);
-  await write(url, `/api/readers/${id}`, { configured: true }, 'PATCH');
-  const { capture } = await (await write(url, `/api/readers/${id}/capture`)).json();
+  await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0_1')));
+  assert.equal((await write(url, `/api/readers/${id}-p1/capture`)).status, 409);
+  await write(url, `/api/readers/${id}-p1`, { configured: true }, 'PATCH');
+  const { capture } = await (await write(url, `/api/readers/${id}-p1/capture`)).json();
   assert.equal((await write(url, `/api/captures/${capture.id}`, {}, 'DELETE', { Origin: 'http://example.invalid' })).status, 403);
   const cancelled = await write(url, `/api/captures/${capture.id}`, {}, 'DELETE');
   assert.equal((await cancelled.json()).capture.status, 'cancelled');
-  const { capture: expiring } = await (await write(url, `/api/readers/${id}/capture`)).json();
+  const { capture: expiring } = await (await write(url, `/api/readers/${id}-p1/capture`)).json();
   app.captures.now = () => Date.parse(expiring.expiresAt) + 1;
   assert.equal((await (await fetch(`${url}/api/captures/${expiring.id}`)).json()).capture.status, 'expired');
 });
@@ -171,25 +171,25 @@ test('server restart preserves active timers and requires a fresh placement befo
   let app = await startServer(options);
   t.after(async () => { await app.close(); await rm(directory, { recursive: true, force: true }); });
   const { session } = await prepareVenue(app, `http://127.0.0.1:${app.address.port}`);
-  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1_1')));
   const startedAt = app.reception.getSession(session.id).startedAt;
   app.reception.assignCard(session.id, '12345678');
   await assert.rejects(startServer({ ...options, port: app.address.port }), { code: 'EADDRINUSE' });
   const next = app.rooms.createRoom({ name: 'Next' });
-  app.venue.updateReader(id, { roomId: next.id, role: 'entry' });
+  app.venue.updateReader(`${id}-p1`, { roomId: next.id, role: 'entry' });
   await app.close(); app = await startServer(options);
-  await firmwarePost(app.address.port, JSON.stringify(payload('12345678_1')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('12345678_1_1')));
   assert.equal(app.reception.getSession(session.id).status, 'active');
   assert.equal(app.reception.getSession(session.id).startedAt, startedAt);
   assert.equal(app.venue.getHistory(session.id).length, 1);
-  await firmwarePost(app.address.port, JSON.stringify(payload('12345678_0')));
-  await firmwarePost(app.address.port, JSON.stringify(payload('12345678_1')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('12345678_0_1')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('12345678_1_1')));
   assert.equal(app.venue.getHistory(session.id).length, 2);
 });
 
 test('legacy deadlines never expire room timers or release cards',async t=>{
  const {app,url}=await fixture(t);const {session}=await prepareVenue(app,url);
- await firmwarePost(app.address.port,JSON.stringify(payload('AABBCCDD_1')));
+ await firmwarePost(app.address.port,JSON.stringify(payload('AABBCCDD_1_1')));
  app.store.db.prepare('UPDATE reception_sessions SET ends_at=? WHERE id=?').run(Date.now()-1,session.id);
  app.venue.reconcile();const team=app.reception.getSession(session.id);assert.equal(team.status,'active');assert.equal(team.endsAt,null);assert.deepEqual(team.cards,['AABBCCDD']);
 });
@@ -204,25 +204,25 @@ test('restart and UDP refresh cannot arm capture until a runtime firmware baseli
   const url = `http://127.0.0.1:${app.address.port}`;
   app.store.recordDiscovery({ id, address: '127.0.0.1' });
   assert.equal((await (await fetch(`${url}/api/readers`)).json())[0].rfidBaselineEstablished, false);
-  assert.equal((await write(url, `/api/readers/${id}/capture`)).status, 409);
-  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  assert.equal((await write(url, `/api/readers/${id}-p1/capture`)).status, 409);
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1_1')));
   assert.equal((await (await fetch(`${url}/api/readers`)).json())[0].rfidBaselineEstablished, true);
-  const { capture } = await (await write(url, `/api/readers/${id}/capture`)).json();
-  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  const { capture } = await (await write(url, `/api/readers/${id}-p1/capture`)).json();
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1_1')));
   assert.equal((await (await fetch(`${url}/api/captures/${capture.id}`)).json()).capture.status, 'waiting');
-  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_0')));
-  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_0_1')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1_1')));
   assert.equal((await (await fetch(`${url}/api/captures/${capture.id}`)).json()).capture.status, 'captured');
 });
 
 test('waiting capture cannot consume a changed held card after known offline recovery and UDP refresh', async t => {
   const { app, url } = await fixture(t);
   const { session } = await prepareVenue(app, url);
-  const { capture } = await (await write(url, `/api/readers/${id}/capture`)).json();
+  const { capture } = await (await write(url, `/api/readers/${id}-p1/capture`)).json();
   app.store.db.prepare('UPDATE devices SET last_seen_at=? WHERE id=?').run(new Date(Date.now()-30000).toISOString(), id);
   app.venue.reconcile();
   app.store.recordDiscovery({ id, address: '127.0.0.1' });
-  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_1_1')));
   const recovered = (await (await fetch(`${url}/api/captures/${capture.id}`)).json()).capture;
   assert.notEqual(recovered.status, 'captured');
   assert.equal(recovered.uid, null);
@@ -231,8 +231,8 @@ test('waiting capture cannot consume a changed held card after known offline rec
 
 test('event endpoints and live snapshots expose at most fifteen newest events', async t => {
   const { app, url } = await fixture(t);
-  await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0')));
-  for (let i = 0; i < 20; i++) await firmwarePost(app.address.port, JSON.stringify(payload(`AABBCCDD_${i % 2 ? 0 : 1}`)));
+  await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0_1')));
+  for (let i = 0; i < 20; i++) await firmwarePost(app.address.port, JSON.stringify(payload(`AABBCCDD_${i % 2 ? 0 : 1}_1`)));
   const events = await (await fetch(`${url}/api/events`)).json();
   assert.equal(events.length, 15);
   assert.equal(events[0].sequence, 20);
@@ -245,9 +245,9 @@ test('reader partial configuration supports multiple readers per room and durabl
   const { app, url } = await fixture(t);
   const { room } = await prepareVenue(app, url);
   const secondId = '0123456789ABCE';
-  await firmwarePost(app.address.port, JSON.stringify({ ...payload('00000000_0'), id: secondId }));
-  await write(url, `/api/readers/${secondId}`, { configured: true, roomId: room.id, role: 'entry', x: 200, y: 150 }, 'PATCH');
-  const renamed = await write(url, `/api/readers/${secondId}`, { name: 'Side door' }, 'PATCH');
+  await firmwarePost(app.address.port, JSON.stringify({ ...payload('00000000_0_1'), id: secondId }));
+  await write(url, `/api/readers/${secondId}-p1`, { configured: true, roomId: room.id, role: 'entry', x: 200, y: 150 }, 'PATCH');
+  const renamed = await write(url, `/api/readers/${secondId}-p1`, { name: 'Side door' }, 'PATCH');
   const reader = (await renamed.json()).reader;
   assert.equal(reader.name, 'Side door');
   assert.equal(reader.configured, true);
@@ -256,11 +256,11 @@ test('reader partial configuration supports multiple readers per room and durabl
   const readers = await (await fetch(`${url}/api/readers`)).json();
   assert.equal(readers.filter(item => item.roomId === room.id).length, 2);
   await write(url, `/api/rooms/${room.id}`, { width: 120, height: 80, x: 42 }, 'PATCH');
-  const moved = (await (await fetch(`${url}/api/readers`)).json()).find(item => item.id === secondId);
+  const moved = (await (await fetch(`${url}/api/readers`)).json()).find(item => item.id === `${secondId}-p1`);
   assert.equal(moved.x, 120); assert.equal(moved.y, 80);
-  assert.equal((await write(url, `/api/readers/${secondId}`, { role: 'invalid' }, 'PATCH')).status, 400);
-  assert.equal((await write(url, `/api/readers/${secondId}`, { configured: 'true' }, 'PATCH')).status, 400);
-  assert.equal((await write(url, `/api/readers/${secondId}`, { name: 'Blocked' }, 'PATCH', { Origin: 'http://example.invalid' })).status, 403);
+  assert.equal((await write(url, `/api/readers/${secondId}-p1`, { role: 'invalid' }, 'PATCH')).status, 400);
+  assert.equal((await write(url, `/api/readers/${secondId}-p1`, { configured: 'true' }, 'PATCH')).status, 400);
+  assert.equal((await write(url, `/api/readers/${secondId}-p1`, { name: 'Blocked' }, 'PATCH', { Origin: 'http://example.invalid' })).status, 403);
   assert.equal((await write(url, '/api/readers/UNKNOWN_DEVICE', {}, 'PATCH')).status, 404);
 });
 test('startup bind failure releases database and does not announce discovery', async t => {
@@ -303,15 +303,15 @@ test('pushes committed state to multiple live clients without polling, and resyn
   const second = await openLive(t, url);
   assert.deepEqual((await first.next()).devices, []);
   assert.equal((await second.next()).health.discovery, 'disabled');
-  for (const card of ['00000000_0', 'AABBCCDD_1', 'AABBCCDD_1']) {
+  for (const card of ['00000000_0_1', 'AABBCCDD_1_1', 'AABBCCDD_1_1']) {
     await firmwarePost(app.address.port, JSON.stringify(payload(card)));
     const [a, b] = await Promise.all([first.next(), second.next()]);
     assert.equal(a.devices[0].lastRfid.uid, card.slice(0, 8));
     assert.deepEqual(a, b);
-    assert.equal(a.events.length, card === '00000000_0' ? 0 : 1);
+    assert.equal(a.events.length, card === '00000000_0_1' ? 0 : 1);
   }
   first.close();
-  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_0')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('AABBCCDD_0_1')));
   assert.equal((await second.next()).events[0].type, 'rfid.removed');
   const reconnected = await openLive(t, url);
   assert.equal((await reconnected.next()).events.length, 2);
@@ -358,7 +358,7 @@ test('reception mutations enforce card ownership and publish session updates', a
 
 test('room configuration validates controller ownership and publishes committed changes', async t => {
   const { app, url } = await fixture(t);
-  await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0')));
+  await firmwarePost(app.address.port, JSON.stringify(payload('00000000_0_1')));
   const live = await openLive(t, url);
   assert.deepEqual((await live.next()).rooms, []);
   const write = (path, body, method = 'POST', headers = {}) => fetch(`${url}${path}`, {
