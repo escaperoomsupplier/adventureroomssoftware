@@ -195,7 +195,7 @@ function draw(force = false) {
     const icon=itemIcon(type);icon.setAttribute('x',x+96);icon.setAttribute('y',y+26);icon.setAttribute('width',13);icon.setAttribute('height',13);g.append(icon);
     const dot=svgNode('circle',{cx:x+106,cy:y+11,r:3.5,class:`vm-contact-dot ${online(type,item)?'vm-contact-online':'vm-contact-offline'}`});g.append(dot);
     const text = svgNode('text', { x: x + 9, y: y + 17 }); text.textContent = (item.name || item.id).slice(0, 14); g.append(text);
-    const label = svgNode('text', { x: x + 9, y: y + 32, class: 'vm-block-sub' }); label.textContent = type === 'screen' ? 'Screen' : `P${item.port ?? '?'} - ${roles[item.role] || 'Reader'}`; g.append(label);
+    const label = svgNode('text', { x: x + 9, y: y + 32, class: 'vm-block-sub' }); label.textContent = type === 'screen' ? 'Screen' : `P${item.port} - ${roles[item.role] || 'Reader'}`; g.append(label);
     const title = svgNode('title'); title.textContent = type==='reader' ? `${readerLabel(item)} - Controller ${controllerId(item)}; sensor presence unknown` : item.name || item.id; g.append(title);
     g.addEventListener('pointerdown', e => begin(e, type, original)); canvas.append(g);
   }
@@ -219,12 +219,11 @@ function listReaders() {
   const focused=document.activeElement?.dataset.readerId;readerList.replaceChildren();
   for(const device of available) {
     const group=node('section',undefined,'vm-controller-group');group.append(node('h4',device.id),node('p',`${device.address || 'Address unknown'}  -  Controller online`,'vm-help'));
-    const ports=readers.filter(r=>controllerId(r)===device.id && r.port!=null).sort((a,b)=>a.port-b.port);
+    const ports=readers.filter(r=>controllerId(r)===device.id).sort((a,b)=>a.port-b.port);
     for(const reader of ports) {
       const b=decorateButton(button('',()=>{const current=itemFor('reader',reader.id);if(current)beginReaderPlacement(current);}), 'reader',reader);
       b.dataset.readerId=reader.id;group.append(b);
     }
-    if(readers.some(r=>controllerId(r)===device.id && r.port==null))group.append(node('p','A legacy reader needs a port assignment. Edit it on the Readers page or map before use.','vm-help'));
     if(!device.portCount) {
       const form=node('form',undefined,'vm-manual-port'),port=field(form,'Port number','');port.type='number';port.min='1';port.max='255';
       const choose=node('button','Choose port');choose.type='submit';form.append(choose);form.onsubmit=e=>{e.preventDefault();const number=Number(port.value),current=devices.find(d=>d.id===device.id);if(!current)return;beginReaderPlacement(readers.find(r=>controllerId(r)===device.id && r.port===number) || {id:`${device.id}-p${number}`,deviceId:device.id,port:number,name:`RFID port ${number}`,configured:false,lastSeenAt:current.lastSeenAt,address:current.address});};group.append(form);
@@ -268,13 +267,12 @@ function select(type, id) {
   if (type === 'room') data = () => ({ name: name.value.trim() });
   else {
     const assigned = field(form, 'Room', current?.roomId || '', [['','Unassigned'], ...rooms.map(r => [r.id,r.name])]);
-    const legacy = type==='reader' && current.id===controllerId(current);
     const capacity = type==='reader' ? current.portCount || devices.find(d=>d.id===controllerId(current))?.portCount || 255 : 0;
-    const port = type === 'reader' ? field(form, 'Controller port', current.port ?? '', legacy ? [['','Legacy / port unknown'],...Array.from({length:capacity},(_,index)=>[String(index+1),`Port ${index+1}`])] : [[String(current.port),`Port ${current.port}`]]) : null;
-    if(port)port.required=!legacy;
-    if(legacy)form.append(node('p','Keep Legacy / port unknown for unaddressed firmware. A numbered port explicitly migrates this reader.','vm-help'));
+    const fixedPort = type==='reader' && current.id===`${current.deviceId}-p${current.port}`;
+    const port = type==='reader' ? field(form,'Controller port',current.port,fixedPort ? [[String(current.port),`Port ${current.port}`]] : Array.from({length:capacity},(_,index)=>[String(index+1),`Port ${index+1}`])) : null;
+    if(port)port.required=true;
     const role = type === 'reader' ? field(form, 'Role', current?.role || 'start', Object.entries(roles)) : null;
-    data = () => ({ name: name.value.trim(), roomId: assigned.value || null, ...(role ? { role: role.value, configured: true, port:legacy && port.value==='' ? null : Number(port.value) } : {}) });
+    data = () => ({ name: name.value.trim(), roomId: assigned.value || null, ...(role ? { role: role.value, configured: true, port:Number(port.value) } : {}) });
   }
   const initial = data();
   const save = node('button', id ? 'Save' : 'Create'); save.type = 'submit'; save.dataset.save = 'true'; form.append(save);

@@ -7,7 +7,7 @@ import { DeviceStore } from '../src/store.js';
 
 const address = '127.0.0.1';
 const snapshot = (uid, placed) => ({ id: 'upc1', softwareVersion: '5.1', hardwareVersion: 5,
-  machineState: 1, rfid: uid ? { uid, placed } : null, raw: { never: 'persist raw payloads' } });
+  machineState: 1, rfid: uid ? { uid, placed, port: 1 } : null, raw: { never: 'persist raw payloads' } });
 
 test('snapshot callback sees previous and inserted state before commit and rejects asynchronous results', () => {
   const store = new DeviceStore(':memory:');
@@ -95,11 +95,11 @@ test('same card on different ports emits distinct events and exact tuple repeats
     const before = store.listDevices();
     assert.throws(() => store.recordSnapshot(packet(3), address, () => { throw new Error('Abort'); }), /Abort/);
     assert.deepEqual(store.listDevices(), before);
-    for (const port of [0, 256, -1, 1.5, '2']) assert.throws(() => store.recordSnapshot(packet(port), address), /RFID/);
+    for (const port of [undefined, null, 0, 256, -1, 1.5, '2']) assert.throws(() => store.recordSnapshot(packet(port), address), /RFID/);
   } finally { store.close(); }
 });
 
-test('legacy database gains nullable event ports without replaying its last card; observed ports survive restart', () => {
+test('explicit port state and observed ports survive restart without replay', () => {
   const directory = mkdtempSync(join(tmpdir(), 'adventure-multiport-'));
   let store;
   try {
@@ -107,16 +107,14 @@ test('legacy database gains nullable event ports without replaying its last card
     store = new DeviceStore(path);
     store.recordSnapshot(snapshot('AABBCCDD', false), address);
     store.recordSnapshot(snapshot('AABBCCDD', true), address);
-    store.db.prepare('UPDATE devices SET last_rfid=?').run(JSON.stringify({ uid: 'AABBCCDD', placed: true }));
-    store.db.exec('DROP TABLE device_observed_ports; ALTER TABLE events DROP COLUMN port');
     store.close(); store = new DeviceStore(path);
-    assert.equal(store.listEvents()[0].port, null);
+    assert.equal(store.listEvents()[0].port, 1);
     assert.equal(store.recordSnapshot(snapshot('AABBCCDD', true), address).event, null);
     const packet = { ...snapshot('AABBCCDD', true), rfid: { uid: 'AABBCCDD', placed: true, port: 3 } };
     assert.equal(store.recordSnapshot(packet, address).event.port, 3);
     store.close(); store = new DeviceStore(path);
     assert.equal(store.recordSnapshot(packet, address).event, null);
-    assert.deepEqual(store.listDevices()[0].observedPorts, [3]);
+    assert.deepEqual(store.listDevices()[0].observedPorts, [1, 3]);
     assert.equal(store.listDevices()[0].lastRfid.port, 3);
   } finally { store?.close(); rmSync(directory, { recursive: true, force: true }); }
 });

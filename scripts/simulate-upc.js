@@ -30,16 +30,16 @@ const snapshot = (rfid, state = '0') => ({
 
 console.log(`UUPC simulator (one RFID reader), target: ${target.origin}`);
 const steps = [
-  ['Initial state', '00000000_0'],
-  ['Card placement', '12AB34CD_1'],
-  ['Repeated full snapshot — no new placement', '12AB34CD_1'],
-  ['Card removal', '12AB34CD_0'],
+  ['Initial state', '00000000_0_1'],
+  ['Card placement', '12AB34CD_1_1'],
+  ['Repeated full snapshot — no new placement', '12AB34CD_1_1'],
+  ['Card removal', '12AB34CD_0_1'],
 ];
 if (withWin) steps.push(
-  ['Puzzle activity', '12AB34CD_0', '1'],
-  ['Win reported', '12AB34CD_0', '2'],
-  ['Repeated win snapshot', '12AB34CD_0', '2'],
-  ['Return to armed', '12AB34CD_0', '0'],
+  ['Puzzle activity', '12AB34CD_0_1', '1'],
+  ['Win reported', '12AB34CD_0_1', '2'],
+  ['Repeated win snapshot', '12AB34CD_0_1', '2'],
+  ['Return to armed', '12AB34CD_0_1', '0'],
 );
 for (const [label, rfid, state = '0'] of steps) {
   const response = await fetch(target, {

@@ -1,22 +1,20 @@
-# Adventure Rooms 0.2.0
+# Adventure Rooms 0.2.1
 
-Independent RFID readers on multiple ports of one UUPC controller.
+This update requires explicit RFID port numbers throughout the application.
 
-## What changed
+## Changes
 
-- New firmware messages `UID_placed_port` route to the exact controller and port. Repeated snapshots are deduplicated using all three fields.
-- A 14-digit numeric UUPC serial provides port capacity through digits 11–12. Known controllers expose ports 1 through their capacity; unknown IDs support observed ports and manual configuration.
-- Each configured port has its own name, room, position and Start time, Stop time, Card assignment or Other role. One controller can serve multiple rooms.
-- Readers are grouped by controller. The map places individual readers, and details retain controller ID, IP address and port for troubleshooting.
-- Pairing, one-shot card capture and automations are isolated by port. Deleting one reader preserves its controller, other readers and recorded history.
+- RFID messages must use `UID_state_port`; messages without a port are rejected.
+- Removed Legacy reader options and implicit controller/port fallbacks.
+- Reader configuration requires an explicit controller ID and numbered port.
+- Pairing, card capture and room timing continue to route by controller and port.
+- Updated simulator, operator documentation and regression tests.
 
-## Upgrade from 0.1.0
+## Before updating
 
-Open **File > Open configuration folder**, then quit the application and back up the complete folder before installing. Existing reader names, rooms, roles and automation references are migrated automatically.
+Quit the application and back up the complete configuration folder using **File > Open configuration folder**. This release does not automatically convert old RFID mappings or database schemas. Use a configuration already prepared for explicit ports; earlier unconverted saves require preparation before startup.
 
-Existing single-reader mappings retain **Legacy / port unknown** until you explicitly choose their physical port in Readers or the map inspector. Legacy mappings accept only older messages without a port; they never guess the source of new numbered-port messages. Choose the correct port before using an upgraded controller for room timing or wristband assignment.
-
-The new configuration format supports several readers per controller. Restore your complete pre-upgrade backup if reverting to 0.1.0.
+Controllers must run firmware that sends the RFID port. Assigning a port in the application does not update controller firmware. A controller can be visible through UDP while its incompatible HTTP RFID messages are rejected.
 
 ## Installers
 
@@ -24,8 +22,6 @@ The new configuration format supports several readers per controller. Restore yo
 - Apple Silicon Mac: open `macos-arm64.dmg` and drag Adventure Rooms to Applications.
 - Intel Mac: use `macos-x64.dmg`.
 
-Node.js is included. Runtime operation remains local. Do not run two servers on the same ports or configuration folder.
+Node.js is included. Venue operation stays local. Windows installers are unsigned; macOS builds are ad-hoc signed and not notarized. Operating-system security checks may affect the first launch.
 
-Windows builds are unsigned. macOS builds use ad-hoc signing and are not notarized. Operating-system security checks may block the first launch. Green reader indicators confirm controller contact, not individual RFID sensor presence. Firmware snapshots are not a durable event stream; after startup or a contact gap, establish a baseline and tap again.
-
-Source tests and packaged launch/shutdown checks run on Windows and both Mac architectures. SHA256SUMS.txt contains installer download checksums.
+Source tests and packaged startup/shutdown checks run on all three platforms before publication. SHA256SUMS.txt provides installer checksums.
