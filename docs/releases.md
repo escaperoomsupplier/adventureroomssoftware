@@ -74,8 +74,9 @@ implementing a change. Successful tests are not release authorization.
 
 Run the release workflow manually, or push the `v0.2.1` tag for this version.
 The workflow builds and smoke-tests Windows x64, macOS x64 and macOS arm64.
-Manual runs retain installers as workflow artifacts. A version tag publishes a
-GitHub Release only after every platform job succeeds.
+Pull requests run source tests only; installer builds run only for version tags or explicit manual requests. npm caches are not stored.
+Manual runs retain installers as workflow artifacts for one day. A version tag publishes a
+GitHub Release only after every platform job succeeds. Temporary workflow artifacts are deleted after successful publication; failed runs expire after one day.
 
 Before publishing, verify that:
 

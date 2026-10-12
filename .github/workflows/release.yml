@@ -1,13 +1,5 @@
 name: Desktop installers
 on:
-  pull_request:
-    paths:
-      - 'desktop/**'
-      - 'src/**'
-      - 'public/**'
-      - 'scripts/**'
-      - 'package*.json'
-      - '.github/workflows/release.yml'
   push:
     tags: ['v*']
   workflow_dispatch:
@@ -37,7 +29,6 @@ jobs:
         with:
           node-version: '24.11.1'
           architecture: ${{ matrix.arch }}
-          cache: npm
       - run: npm ci
       - name: Verify release tag
         if: startsWith(github.ref, 'refs/tags/')
@@ -52,13 +43,14 @@ jobs:
             dist/*.exe
             dist/*.dmg
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
   publish:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -73,3 +65,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" installers/* --verify-tag --title "Adventure Rooms $GITHUB_REF_NAME" --notes-file docs/release-notes.md
+      - name: Remove temporary installers after publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].id' |
+          while read -r artifact_id; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
+          done
